@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/ci.yaml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "src/**"
+      - "tests/**"
+  pull_request:
+    paths:
+      - ".github/workflows/ci.yaml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "src/**"
+      - "tests/**"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_FUTURE_INCOMPAT_REPORT_FREQUENCY: never
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Rustdoc
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --locked --workspace --all-features --no-deps
+
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Test
+        run: cargo test --locked --workspace --all-features
