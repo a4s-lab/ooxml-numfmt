@@ -4,7 +4,7 @@
 //! The dates.tsv file contains comprehensive tests for date display in different styles.
 
 use flate2::read::GzDecoder;
-use ooxml_numfmt::format_default;
+use ooxml_numfmt::{format_default, plain_text};
 use std::io::Read;
 
 #[derive(Debug)]
@@ -83,7 +83,8 @@ fn test_ssf_dates() {
         let expected = test.expected.replace(&"#".repeat(255), "");
 
         match format_default(test.value, &test.format) {
-            Ok(result) => {
+            Ok(parts) => {
+                let result = plain_text(&parts);
                 if result == expected {
                     passed += 1;
                 } else {

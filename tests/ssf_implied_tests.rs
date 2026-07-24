@@ -4,7 +4,7 @@
 //! format IDs (0-49). Each test case provides a value and expected outputs
 //! for all built-in format IDs.
 
-use ooxml_numfmt::format_with_id_default;
+use ooxml_numfmt::{format_with_id_default, plain_text};
 use serde_json::Value;
 
 #[derive(Debug)]
@@ -71,7 +71,8 @@ fn test_ssf_implied_formats() {
         }
 
         match format_with_id_default(test.value, test.format_id) {
-            Ok(result) => {
+            Ok(parts) => {
+                let result = plain_text(&parts);
                 if result == test.expected {
                     passed += 1;
                 } else {

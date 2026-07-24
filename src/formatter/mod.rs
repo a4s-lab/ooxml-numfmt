@@ -17,35 +17,40 @@ pub use bigint::{fallback_format_bigint, format_bigint, is_safe_integer};
 use crate::ast::{FormatPart, NumberFormat, Section};
 use crate::error::FormatError;
 use crate::options::FormatOptions;
+use crate::output::{text_if_nonempty, FormatOutput};
 
 impl NumberFormat {
     /// Format a numeric value using this format code.
     ///
-    /// This is an infallible method that returns a formatted string.
+    /// This is an infallible method that returns structured formatting output.
     /// For date formats or when precise error handling is needed,
     /// use `try_format()` instead.
-    pub fn format(&self, value: f64, opts: &FormatOptions) -> String {
+    pub fn format(&self, value: f64, opts: &FormatOptions) -> Vec<FormatOutput> {
         match self.try_format(value, opts) {
             Ok(result) => result,
-            Err(_) => fallback_format(value),
+            Err(_) => text_if_nonempty(fallback_format(value)),
         }
     }
 
     /// Try to format a numeric value using this format code.
     ///
     /// Returns an error if the format cannot be applied to the value.
-    pub fn try_format(&self, value: f64, opts: &FormatOptions) -> Result<String, FormatError> {
+    pub fn try_format(
+        &self,
+        value: f64,
+        opts: &FormatOptions,
+    ) -> Result<Vec<FormatOutput>, FormatError> {
         // Handle special float values
         if value.is_nan() {
-            return Ok("NaN".to_string());
+            return Ok(text_if_nonempty("NaN"));
         }
         if value.is_infinite() {
-            return Ok(if value.is_sign_positive() {
+            let text = if value.is_sign_positive() {
                 "Infinity"
             } else {
                 "-Infinity"
-            }
-            .to_string());
+            };
+            return Ok(text_if_nonempty(text));
         }
 
         // Select the appropriate section based on value
@@ -70,12 +75,14 @@ impl NumberFormat {
             } else {
                 format_value
             };
-            return Ok(fallback_format(truncated_value));
+            let result = text_if_nonempty(fallback_format(truncated_value));
+            return Ok(with_section_color(section, result));
         }
 
         // Check if this is a date format
         if section.has_date_parts() {
-            return date::format_date(format_value, section, opts);
+            let result = date::format_date(format_value, section, opts)?;
+            return Ok(with_section_color(section, result));
         }
 
         // Determine if we need to add a minus sign
@@ -111,10 +118,10 @@ impl NumberFormat {
         // Note: format_number uses abs(value), so it never includes the minus sign
         // Exception: Fraction and scientific notation formats add their own minus sign
         if need_minus_sign {
-            result.insert(0, '-');
+            result.insert(0, FormatOutput::Text("-".to_string()));
         }
 
-        Ok(result)
+        Ok(with_section_color(section, result))
     }
 
     /// Select the appropriate format section based on the value.
@@ -188,27 +195,31 @@ impl NumberFormat {
     ///
     /// If this format has a text section (4th section), it will be used.
     /// Otherwise, the text is returned as-is.
-    pub fn format_text(&self, text: &str, _opts: &FormatOptions) -> String {
+    pub fn format_text(&self, text: &str, _opts: &FormatOptions) -> Vec<FormatOutput> {
         let sections = self.sections();
 
         // Text section is the 4th section if present
         if sections.len() >= 4 {
             let text_section = &sections[3];
-            let mut result = String::new();
+            let mut result = Vec::with_capacity(text_section.parts.len());
 
             for part in &text_section.parts {
                 match part {
-                    FormatPart::TextPlaceholder => result.push_str(text),
-                    FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => result.push_str(s),
+                    FormatPart::TextPlaceholder => {
+                        result.push(FormatOutput::Text(text.to_string()))
+                    }
+                    FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => {
+                        result.push(FormatOutput::Text(s.clone()))
+                    }
                     _ => {}
                 }
             }
 
-            return result;
+            return with_section_color(text_section, result);
         }
 
         // Default: return text as-is
-        text.to_string()
+        text_if_nonempty(text)
     }
 
     /// Format a BigInt value using this format code (requires `bigint` feature).
@@ -217,10 +228,14 @@ impl NumberFormat {
     /// standard formatting. For larger values, uses string-based formatting to
     /// preserve precision.
     #[cfg(feature = "bigint")]
-    pub fn format_bigint(&self, value: &num_bigint::BigInt, opts: &FormatOptions) -> String {
+    pub fn format_bigint(
+        &self,
+        value: &num_bigint::BigInt,
+        opts: &FormatOptions,
+    ) -> Vec<FormatOutput> {
         match self.try_format_bigint(value, opts) {
             Ok(result) => result,
-            Err(_) => bigint::fallback_format_bigint(value),
+            Err(_) => text_if_nonempty(bigint::fallback_format_bigint(value)),
         }
     }
 
@@ -234,7 +249,7 @@ impl NumberFormat {
         &self,
         value: &num_bigint::BigInt,
         opts: &FormatOptions,
-    ) -> Result<String, FormatError> {
+    ) -> Result<Vec<FormatOutput>, FormatError> {
         use num_bigint::Sign;
 
         // Check if value is within safe f64 range
@@ -260,7 +275,8 @@ impl NumberFormat {
 
         // Handle "General" format (empty section with no parts)
         if section.parts.is_empty() {
-            return Ok(bigint::fallback_format_bigint(value));
+            let result = text_if_nonempty(bigint::fallback_format_bigint(value));
+            return Ok(with_section_color(section, result));
         }
 
         // Check if this is a date format - BigInt can't be used for dates
@@ -278,10 +294,10 @@ impl NumberFormat {
         let sections = self.sections();
         let has_numeric_parts = section.parts.iter().any(|p| p.is_numeric_part());
         if sections.len() == 1 && is_negative && has_numeric_parts {
-            result.insert(0, '-');
+            result.insert(0, FormatOutput::Text("-".to_string()));
         }
 
-        Ok(result)
+        Ok(with_section_color(section, result))
     }
 }
 
@@ -419,10 +435,19 @@ pub fn fallback_format(value: f64) -> String {
     }
 }
 
+fn with_section_color(section: &Section, mut output: Vec<FormatOutput>) -> Vec<FormatOutput> {
+    if let Some(color) = section.color {
+        output.insert(0, FormatOutput::Color(color));
+    }
+
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ast::{Condition, DigitPlaceholder, Section};
+    use crate::output::plain_text;
 
     fn make_format(sections: Vec<Section>) -> NumberFormat {
         NumberFormat::from_sections(sections)
@@ -445,9 +470,9 @@ mod tests {
 
         let opts = FormatOptions::default();
         // Single-section formats: negative values get a minus sign prefix
-        assert_eq!(fmt.format(42.0, &opts), "42");
-        assert_eq!(fmt.format(-42.0, &opts), "-42");
-        assert_eq!(fmt.format(0.0, &opts), "0");
+        assert_eq!(plain_text(&fmt.format(42.0, &opts)), "42");
+        assert_eq!(plain_text(&fmt.format(-42.0, &opts)), "-42");
+        assert_eq!(plain_text(&fmt.format(0.0, &opts)), "0");
     }
 
     #[test]
@@ -461,9 +486,9 @@ mod tests {
         ]);
 
         let opts = FormatOptions::default();
-        assert_eq!(fmt.format(42.0, &opts), "42");
-        assert_eq!(fmt.format(-42.0, &opts), "-42");
-        assert_eq!(fmt.format(0.0, &opts), "0");
+        assert_eq!(plain_text(&fmt.format(42.0, &opts)), "42");
+        assert_eq!(plain_text(&fmt.format(-42.0, &opts)), "-42");
+        assert_eq!(plain_text(&fmt.format(0.0, &opts)), "0");
     }
 
     #[test]
@@ -481,9 +506,9 @@ mod tests {
         ]);
 
         let opts = FormatOptions::default();
-        assert_eq!(fmt.format(42.0, &opts), "+42");
-        assert_eq!(fmt.format(-42.0, &opts), "-42");
-        assert_eq!(fmt.format(0.0, &opts), "ZERO");
+        assert_eq!(plain_text(&fmt.format(42.0, &opts)), "+42");
+        assert_eq!(plain_text(&fmt.format(-42.0, &opts)), "-42");
+        assert_eq!(plain_text(&fmt.format(0.0, &opts)), "ZERO");
     }
 
     #[test]
@@ -499,8 +524,8 @@ mod tests {
         ]);
 
         let opts = FormatOptions::default();
-        assert_eq!(fmt.format(150.0, &opts), "BIG");
-        assert_eq!(fmt.format(50.0, &opts), "50");
+        assert_eq!(plain_text(&fmt.format(150.0, &opts)), "BIG");
+        assert_eq!(plain_text(&fmt.format(50.0, &opts)), "50");
     }
 
     #[test]
@@ -524,6 +549,9 @@ mod tests {
         ]);
 
         let opts = FormatOptions::default();
-        assert_eq!(fmt.format_text("hello", &opts), "<<hello>>");
+        assert_eq!(plain_text(&fmt.format_text("hello", &opts)), "<<hello>>");
+
+        let fmt_without_text_section = make_format(vec![make_section(vec![])]);
+        assert!(fmt_without_text_section.format_text("", &opts).is_empty());
     }
 }

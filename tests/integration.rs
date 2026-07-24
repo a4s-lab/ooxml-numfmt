@@ -1,6 +1,10 @@
 //! Integration tests for ooxml-numfmt - comprehensive tests covering realistic Excel format codes.
 
-use ooxml_numfmt::{DateSystem, FormatOptions, NumberFormat};
+use ooxml_numfmt::{plain_text, DateSystem, FormatOptions, NumberFormat};
+
+fn format_plain(fmt: &NumberFormat, value: f64, opts: &FormatOptions) -> String {
+    plain_text(&fmt.format(value, opts))
+}
 
 // ============================================================================
 // Number Formats
@@ -14,8 +18,8 @@ fn test_general_number() {
     let fmt = NumberFormat::parse("0").unwrap();
     let opts = FormatOptions::default();
 
-    assert_eq!(fmt.format(42.0, &opts), "42");
-    assert_eq!(fmt.format(3.17, &opts), "3"); // Rounds to integer
+    assert_eq!(format_plain(&fmt, 42.0, &opts), "42");
+    assert_eq!(format_plain(&fmt, 3.17, &opts), "3"); // Rounds to integer
 
     // Also test that "General" parses (even if it produces literal output)
     let general_fmt = NumberFormat::parse("General");
@@ -32,7 +36,7 @@ fn test_accounting_format() {
     let fmt = NumberFormat::parse("_($* #,##0.00_)").unwrap();
     let opts = FormatOptions::default();
 
-    let result = fmt.format(1234.56, &opts);
+    let result = format_plain(&fmt, 1234.56, &opts);
     // Should contain the currency symbol and formatted number
     assert!(
         result.contains("1,234.56"),
@@ -47,8 +51,8 @@ fn test_negative_in_parens() {
     let fmt = NumberFormat::parse("#,##0;(#,##0)").unwrap();
     let opts = FormatOptions::default();
 
-    let positive = fmt.format(1234.0, &opts);
-    let negative = fmt.format(-1234.0, &opts);
+    let positive = format_plain(&fmt, 1234.0, &opts);
+    let negative = format_plain(&fmt, -1234.0, &opts);
 
     assert_eq!(positive, "1,234");
     assert!(
@@ -69,9 +73,9 @@ fn test_zero_section() {
     let fmt = NumberFormat::parse("0;-0;\"zero\"").unwrap();
     let opts = FormatOptions::default();
 
-    assert_eq!(fmt.format(42.0, &opts), "42");
-    assert_eq!(fmt.format(-42.0, &opts), "-42");
-    assert_eq!(fmt.format(0.0, &opts), "zero");
+    assert_eq!(format_plain(&fmt, 42.0, &opts), "42");
+    assert_eq!(format_plain(&fmt, -42.0, &opts), "-42");
+    assert_eq!(format_plain(&fmt, 0.0, &opts), "zero");
 }
 
 // ============================================================================
@@ -84,7 +88,7 @@ fn test_iso_date() {
     let fmt = NumberFormat::parse("yyyy-mm-dd").unwrap();
     let opts = FormatOptions::default();
 
-    assert_eq!(fmt.format(46031.0, &opts), "2026-01-09");
+    assert_eq!(format_plain(&fmt, 46031.0, &opts), "2026-01-09");
 }
 
 #[test]
@@ -93,7 +97,7 @@ fn test_us_date() {
     let fmt = NumberFormat::parse("m/d/yy").unwrap();
     let opts = FormatOptions::default();
 
-    assert_eq!(fmt.format(46031.0, &opts), "1/9/26");
+    assert_eq!(format_plain(&fmt, 46031.0, &opts), "1/9/26");
 }
 
 #[test]
@@ -102,7 +106,7 @@ fn test_long_date() {
     let fmt = NumberFormat::parse("dddd, mmmm d, yyyy").unwrap();
     let opts = FormatOptions::default();
 
-    let result = fmt.format(46031.0, &opts);
+    let result = format_plain(&fmt, 46031.0, &opts);
     assert!(
         result.contains("January"),
         "Expected 'January' in result: {}",
@@ -130,7 +134,7 @@ fn test_24h_time() {
     let fmt = NumberFormat::parse("hh:mm:ss").unwrap();
     let opts = FormatOptions::default();
 
-    assert_eq!(fmt.format(0.75, &opts), "18:00:00");
+    assert_eq!(format_plain(&fmt, 0.75, &opts), "18:00:00");
 }
 
 #[test]
@@ -139,7 +143,7 @@ fn test_12h_time() {
     let fmt = NumberFormat::parse("h:mm AM/PM").unwrap();
     let opts = FormatOptions::default();
 
-    let result = fmt.format(0.75, &opts);
+    let result = format_plain(&fmt, 0.75, &opts);
     // 0.75 = 18:00 = 6 PM
     assert!(result.contains("6"), "Expected '6' in result: {}", result);
     assert!(result.contains("PM"), "Expected 'PM' in result: {}", result);
@@ -161,7 +165,7 @@ fn test_1904_date_system() {
     };
 
     // Serial 1 = January 2, 1904 in the 1904 system
-    assert_eq!(fmt.format(1.0, &opts), "1904-01-02");
+    assert_eq!(format_plain(&fmt, 1.0, &opts), "1904-01-02");
 }
 
 // ============================================================================
@@ -186,8 +190,8 @@ fn test_conditional_format() {
     let opts = FormatOptions::default();
 
     // Test the conditional formatting
-    assert_eq!(fmt.format(150.0, &opts), "high");
-    assert_eq!(fmt.format(50.0, &opts), "low");
+    assert_eq!(format_plain(&fmt, 150.0, &opts), "high");
+    assert_eq!(format_plain(&fmt, 50.0, &opts), "low");
 }
 
 // ============================================================================
@@ -199,8 +203,8 @@ fn test_percentage_format() {
     let fmt = NumberFormat::parse("0.00%").unwrap();
     let opts = FormatOptions::default();
 
-    assert_eq!(fmt.format(0.125, &opts), "12.50%");
-    assert_eq!(fmt.format(1.0, &opts), "100.00%");
+    assert_eq!(format_plain(&fmt, 0.125, &opts), "12.50%");
+    assert_eq!(format_plain(&fmt, 1.0, &opts), "100.00%");
 }
 
 #[test]
@@ -210,7 +214,7 @@ fn test_thousands_scaling() {
     let opts = FormatOptions::default();
 
     // 1,234,567 scaled by 1000 = 1234.567, rounded = 1,235
-    let result = fmt.format(1234567.0, &opts);
+    let result = format_plain(&fmt, 1234567.0, &opts);
     assert!(
         result.contains("1") && result.len() < 10,
         "Expected scaled result: {}",
@@ -223,7 +227,7 @@ fn test_literal_text_in_format() {
     let fmt = NumberFormat::parse("\"Value: \"0").unwrap();
     let opts = FormatOptions::default();
 
-    assert_eq!(fmt.format(42.0, &opts), "Value: 42");
+    assert_eq!(format_plain(&fmt, 42.0, &opts), "Value: 42");
 }
 
 #[test]
@@ -232,7 +236,7 @@ fn test_skip_character() {
     let fmt = NumberFormat::parse("_-0_-").unwrap();
     let opts = FormatOptions::default();
 
-    let result = fmt.format(42.0, &opts);
+    let result = format_plain(&fmt, 42.0, &opts);
     // Skip characters should produce some kind of spacing
     assert!(result.contains("42"), "Expected '42' in result: {}", result);
 }
@@ -243,7 +247,7 @@ fn test_datetime_combined() {
     let opts = FormatOptions::default();
 
     // Serial 46031.75 = 2026-01-09 18:00:00
-    assert_eq!(fmt.format(46031.75, &opts), "2026-01-09 18:00:00");
+    assert_eq!(format_plain(&fmt, 46031.75, &opts), "2026-01-09 18:00:00");
 }
 
 #[test]
@@ -254,7 +258,7 @@ fn test_scientific_notation() {
     let fmt = NumberFormat::parse("0.00E+00").unwrap();
     let opts = FormatOptions::default();
 
-    let result = fmt.format(1234.0, &opts);
+    let result = format_plain(&fmt, 1234.0, &opts);
     // The format parses but scientific notation output is not yet implemented
     // So we just verify we get some numeric output without error
     assert!(
@@ -273,9 +277,9 @@ fn test_special_float_values() {
     let opts = FormatOptions::default();
 
     // NaN
-    assert_eq!(fmt.format(f64::NAN, &opts), "NaN");
+    assert_eq!(format_plain(&fmt, f64::NAN, &opts), "NaN");
 
     // Infinity
-    assert_eq!(fmt.format(f64::INFINITY, &opts), "Infinity");
-    assert_eq!(fmt.format(f64::NEG_INFINITY, &opts), "-Infinity");
+    assert_eq!(format_plain(&fmt, f64::INFINITY, &opts), "Infinity");
+    assert_eq!(format_plain(&fmt, f64::NEG_INFINITY, &opts), "-Infinity");
 }

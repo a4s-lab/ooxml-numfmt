@@ -3,6 +3,7 @@
 use crate::ast::{DigitPlaceholder, FormatPart, Section};
 use crate::error::FormatError;
 use crate::options::FormatOptions;
+use crate::output::{output_for_part, text_if_nonempty, FormatOutput};
 
 /// Format a simple integer value with digit placeholders (no separators or literals).
 /// Based on SSF's write_num helper in bits/59_numhelp.js.
@@ -202,14 +203,12 @@ pub fn analyze_format(section: &Section) -> FormatAnalysis {
                     suffix_parts.push(part.clone());
                 }
             }
-            FormatPart::Skip(c) => {
-                // Skip adds space equivalent to character width
+            FormatPart::Fill(_) | FormatPart::Skip(_) => {
                 if !seen_digit {
-                    prefix_parts.push(FormatPart::Literal(" ".to_string()));
+                    prefix_parts.push(part.clone());
                 } else {
-                    suffix_parts.push(FormatPart::Literal(" ".to_string()));
+                    suffix_parts.push(part.clone());
                 }
-                let _ = c; // suppress unused warning
             }
             _ => {
                 // Handle other parts as literals in prefix/suffix
@@ -265,7 +264,7 @@ pub fn format_number(
     value: f64,
     section: &Section,
     opts: &FormatOptions,
-) -> Result<String, FormatError> {
+) -> Result<Vec<FormatOutput>, FormatError> {
     // Check if this is scientific notation
     let scientific_part = section.parts.iter().find_map(|p| {
         if let FormatPart::Scientific { upper, show_plus } = p {
@@ -289,7 +288,7 @@ pub fn format_number(
 
     // Check if this is a text-only format
     if section.metadata.format_type == FormatType::Text {
-        return Ok(crate::formatter::fallback_format(value));
+        return Ok(text_if_nonempty(crate::formatter::fallback_format(value)));
     }
 
     // Check if section has any numeric placeholders
@@ -309,47 +308,19 @@ pub fn format_number(
         if has_general_number {
             // Section has GeneralNumber part - use General format + append literals
             // This handles cases like "General " where we want to format the number and add a suffix
-            let mut result = crate::formatter::fallback_format(value);
+            let formatted = crate::formatter::fallback_format(value);
+            let mut result = Vec::with_capacity(section.parts.len());
             for part in &section.parts {
-                match part {
-                    FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => result.push_str(s),
-                    FormatPart::Locale(locale_code) => {
-                        if let Some(ref currency) = locale_code.currency {
-                            result.push_str(currency);
-                        }
-                    }
-                    FormatPart::Percent => result.push('%'),
-                    FormatPart::Skip(_) => result.push(' '),
-                    FormatPart::Fill(_) => {
-                        // Fill character - for now just skip it
-                    }
-                    FormatPart::GeneralNumber => {
-                        // Already handled - skip
-                    }
-                    _ => {}
+                if matches!(part, FormatPart::GeneralNumber) {
+                    result.push(FormatOutput::Text(formatted.clone()));
+                } else if let Some(output) = output_for_part(part) {
+                    result.push(output);
                 }
             }
             return Ok(result);
         } else {
-            // No GeneralNumber - just return the literals without formatting the number
-            let mut result = String::new();
-            for part in &section.parts {
-                match part {
-                    FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => result.push_str(s),
-                    FormatPart::Locale(locale_code) => {
-                        if let Some(ref currency) = locale_code.currency {
-                            result.push_str(currency);
-                        }
-                    }
-                    FormatPart::Percent => result.push('%'),
-                    FormatPart::Skip(_) => result.push(' '),
-                    FormatPart::Fill(_) => {
-                        // Fill character - for now just skip it in literal-only formats
-                        // TODO: implement proper fill behavior with available width
-                    }
-                    _ => {}
-                }
-            }
+            // No GeneralNumber - return the literal and layout parts without formatting the number.
+            let result = section.parts.iter().filter_map(output_for_part).collect();
             return Ok(result);
         }
     }
@@ -406,7 +377,7 @@ fn format_number_as_integer(
     value: i64,
     section: &Section,
     opts: &FormatOptions,
-) -> Result<String, FormatError> {
+) -> Result<Vec<FormatOutput>, FormatError> {
     let analysis = analyze_format(section);
 
     // Work with absolute value, track sign separately
@@ -717,61 +688,18 @@ fn format_decimal(
     result
 }
 
-/// Calculate the exact character count for format parts (prefix/suffix).
-fn count_part_chars(parts: &[FormatPart]) -> usize {
-    parts
-        .iter()
-        .map(|part| match part {
-            FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => s.len(),
-            FormatPart::Locale(locale_code) => locale_code.currency.as_ref().map_or(0, |s| s.len()),
-            FormatPart::Percent => 1,
-            _ => 0,
-        })
-        .sum()
-}
-
-/// Build the final result string with prefix and suffix parts.
+/// Build the final result with prefix and suffix parts.
 fn build_result(
     analysis: &FormatAnalysis,
     formatted_number: &str,
     _opts: &FormatOptions,
-) -> String {
-    // Pre-allocate exact capacity (no reallocation, no waste)
-    let capacity = count_part_chars(&analysis.prefix_parts)
-        + formatted_number.len()
-        + count_part_chars(&analysis.suffix_parts);
-    let mut result = String::with_capacity(capacity);
+) -> Vec<FormatOutput> {
+    let capacity = analysis.prefix_parts.len() + analysis.suffix_parts.len() + 1;
+    let mut result = Vec::with_capacity(capacity);
 
-    // Add prefix parts
-    for part in &analysis.prefix_parts {
-        match part {
-            FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => result.push_str(s),
-            FormatPart::Locale(locale_code) => {
-                if let Some(ref currency) = locale_code.currency {
-                    result.push_str(currency);
-                }
-            }
-            FormatPart::Percent => result.push('%'),
-            _ => {}
-        }
-    }
-
-    // Add the formatted number
-    result.push_str(formatted_number);
-
-    // Add suffix parts
-    for part in &analysis.suffix_parts {
-        match part {
-            FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => result.push_str(s),
-            FormatPart::Locale(locale_code) => {
-                if let Some(ref currency) = locale_code.currency {
-                    result.push_str(currency);
-                }
-            }
-            FormatPart::Percent => result.push('%'),
-            _ => {}
-        }
-    }
+    result.extend(analysis.prefix_parts.iter().filter_map(output_for_part));
+    result.push(FormatOutput::Text(formatted_number.to_string()));
+    result.extend(analysis.suffix_parts.iter().filter_map(output_for_part));
 
     result
 }
@@ -783,7 +711,7 @@ fn format_scientific(
     upper: bool,
     show_plus: bool,
     _opts: &FormatOptions,
-) -> Result<String, FormatError> {
+) -> Result<Vec<FormatOutput>, FormatError> {
     // Count digits before and after decimal in mantissa, and exponent digits
     let mut mantissa_integer_places = 0;
     let mut mantissa_decimal_places = 0;
@@ -825,7 +753,8 @@ fn format_scientific(
         };
         let exp_char = if upper { 'E' } else { 'e' };
         let sign = if show_plus { "+" } else { "" };
-        return Ok(format!("0{}{}{sign}00", decimal_part, exp_char));
+        let formatted = format!("0{}{}{sign}00", decimal_part, exp_char);
+        return compose_scientific_output(section, formatted);
     }
 
     // Calculate exponent based on integer placeholder count
@@ -877,12 +806,54 @@ fn format_scientific(
     };
     let formatted = format!("{}{}{}{}", mantissa_str, exp_char, exp_sign, exp_str);
 
-    // Apply sign for negative values
-    if value < 0.0 {
-        Ok(format!("-{}", formatted))
+    // Apply sign for negative values.
+    let formatted = if value < 0.0 {
+        format!("-{}", formatted)
     } else {
-        Ok(formatted)
-    }
+        formatted
+    };
+
+    compose_scientific_output(section, formatted)
+}
+
+fn compose_scientific_output(
+    section: &Section,
+    formatted: String,
+) -> Result<Vec<FormatOutput>, FormatError> {
+    let first_digit = section
+        .parts
+        .iter()
+        .position(|part| matches!(part, FormatPart::Digit(_)))
+        .ok_or(FormatError::TypeMismatch {
+            expected: "scientific format",
+            got: "scientific format without digit placeholders",
+        })?;
+    let last_digit = section
+        .parts
+        .iter()
+        .rposition(|part| matches!(part, FormatPart::Digit(_)))
+        .ok_or(FormatError::TypeMismatch {
+            expected: "scientific format",
+            got: "scientific format without digit placeholders",
+        })?;
+
+    let prefix_len = first_digit;
+    let suffix_len = section.parts.len().saturating_sub(last_digit + 1);
+    let mut result = Vec::with_capacity(prefix_len + suffix_len + 1);
+
+    result.extend(
+        section.parts[..first_digit]
+            .iter()
+            .filter_map(output_for_part),
+    );
+    result.push(FormatOutput::Text(formatted));
+    result.extend(
+        section.parts[last_digit.saturating_add(1)..]
+            .iter()
+            .filter_map(output_for_part),
+    );
+
+    Ok(result)
 }
 
 #[cfg(test)]

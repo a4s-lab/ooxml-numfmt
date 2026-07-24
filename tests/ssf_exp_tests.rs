@@ -4,7 +4,7 @@
 //! different numbers of integer digits before the decimal point.
 
 use flate2::read::GzDecoder;
-use ooxml_numfmt::format_default;
+use ooxml_numfmt::{format_default, plain_text};
 use std::io::Read;
 
 #[derive(Debug)]
@@ -77,7 +77,8 @@ fn test_ssf_exponential_formats() {
         }
 
         match format_default(test.value, &test.format) {
-            Ok(result) => {
+            Ok(parts) => {
+                let result = plain_text(&parts);
                 if result == test.expected {
                     passed += 1;
                 } else {

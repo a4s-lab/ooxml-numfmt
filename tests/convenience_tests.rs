@@ -1,16 +1,16 @@
-use ooxml_numfmt::{format, format_default};
+use ooxml_numfmt::{format, format_default, plain_text};
 
 #[test]
 fn test_format_convenience() {
     let opts = ooxml_numfmt::FormatOptions::default();
-    let result = format(1234.5, "#,##0.00", &opts).unwrap();
-    assert_eq!(result, "1,234.50");
+    let parts = format(1234.5, "#,##0.00", &opts).unwrap();
+    assert_eq!(plain_text(&parts), "1,234.50");
 }
 
 #[test]
 fn test_format_default_convenience() {
-    let result = format_default(0.42, "0%").unwrap();
-    assert_eq!(result, "42%");
+    let parts = format_default(0.42, "0%").unwrap();
+    assert_eq!(plain_text(&parts), "42%");
 }
 
 #[test]

@@ -3,7 +3,7 @@
 //! These tests verify that ooxml-numfmt matches Excel's "General" number format behavior
 //! as documented and tested by the SheetJS ssf library.
 
-use ooxml_numfmt::format_with_id_default;
+use ooxml_numfmt::{format_with_id_default, plain_text};
 use serde_json::Value;
 
 #[derive(Debug)]
@@ -56,7 +56,8 @@ fn test_ssf_general_suite() {
         }
 
         match format_with_id_default(test.value, test.format_id) {
-            Ok(result) => {
+            Ok(parts) => {
+                let result = plain_text(&parts);
                 if result == test.expected {
                     passed += 1;
                 } else {

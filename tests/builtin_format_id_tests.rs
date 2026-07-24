@@ -1,78 +1,103 @@
-use ooxml_numfmt::{format_code_from_id, format_with_id_default};
+use ooxml_numfmt::{format_code_from_id, format_with_id_default, plain_text, FormatOutput};
+
+fn plain(parts: Vec<FormatOutput>) -> String {
+    plain_text(&parts)
+}
 
 /// Test built-in format ID 0 (General)
 #[test]
 fn test_format_id_0_general() {
     // Basic numbers
-    assert_eq!(format_with_id_default(0.0, 0).unwrap(), "0");
-    assert_eq!(format_with_id_default(1.0, 0).unwrap(), "1");
-    assert_eq!(format_with_id_default(1234.56, 0).unwrap(), "1234.56");
-    assert_eq!(format_with_id_default(-42.5, 0).unwrap(), "-42.5");
+    assert_eq!(plain(format_with_id_default(0.0, 0).unwrap()), "0");
+    assert_eq!(plain(format_with_id_default(1.0, 0).unwrap()), "1");
+    assert_eq!(
+        plain(format_with_id_default(1234.56, 0).unwrap()),
+        "1234.56"
+    );
+    assert_eq!(plain(format_with_id_default(-42.5, 0).unwrap()), "-42.5");
 
     // No trailing zeros
-    assert_eq!(format_with_id_default(1.5, 0).unwrap(), "1.5");
-    assert_eq!(format_with_id_default(1.50000, 0).unwrap(), "1.5");
+    assert_eq!(plain(format_with_id_default(1.5, 0).unwrap()), "1.5");
+    assert_eq!(plain(format_with_id_default(1.50000, 0).unwrap()), "1.5");
 }
 
 /// Test built-in format ID 1 (0)
 #[test]
 fn test_format_id_1_integer() {
-    assert_eq!(format_with_id_default(0.0, 1).unwrap(), "0");
-    assert_eq!(format_with_id_default(1.0, 1).unwrap(), "1");
-    assert_eq!(format_with_id_default(1234.5, 1).unwrap(), "1235"); // Rounds
-    assert_eq!(format_with_id_default(1234.4, 1).unwrap(), "1234");
-    assert_eq!(format_with_id_default(-42.0, 1).unwrap(), "-42");
+    assert_eq!(plain(format_with_id_default(0.0, 1).unwrap()), "0");
+    assert_eq!(plain(format_with_id_default(1.0, 1).unwrap()), "1");
+    assert_eq!(plain(format_with_id_default(1234.5, 1).unwrap()), "1235"); // Rounds
+    assert_eq!(plain(format_with_id_default(1234.4, 1).unwrap()), "1234");
+    assert_eq!(plain(format_with_id_default(-42.0, 1).unwrap()), "-42");
 }
 
 /// Test built-in format ID 2 (0.00)
 #[test]
 fn test_format_id_2_two_decimals() {
-    assert_eq!(format_with_id_default(0.0, 2).unwrap(), "0.00");
-    assert_eq!(format_with_id_default(1.0, 2).unwrap(), "1.00");
-    assert_eq!(format_with_id_default(1234.56, 2).unwrap(), "1234.56");
-    assert_eq!(format_with_id_default(1234.567, 2).unwrap(), "1234.57"); // Rounds
-    assert_eq!(format_with_id_default(-42.1, 2).unwrap(), "-42.10");
+    assert_eq!(plain(format_with_id_default(0.0, 2).unwrap()), "0.00");
+    assert_eq!(plain(format_with_id_default(1.0, 2).unwrap()), "1.00");
+    assert_eq!(
+        plain(format_with_id_default(1234.56, 2).unwrap()),
+        "1234.56"
+    );
+    assert_eq!(
+        plain(format_with_id_default(1234.567, 2).unwrap()),
+        "1234.57"
+    ); // Rounds
+    assert_eq!(plain(format_with_id_default(-42.1, 2).unwrap()), "-42.10");
 }
 
 /// Test built-in format ID 3 (#,##0)
 #[test]
 fn test_format_id_3_thousands() {
-    assert_eq!(format_with_id_default(0.0, 3).unwrap(), "0");
-    assert_eq!(format_with_id_default(999.0, 3).unwrap(), "999");
-    assert_eq!(format_with_id_default(1000.0, 3).unwrap(), "1,000");
-    assert_eq!(format_with_id_default(1234567.0, 3).unwrap(), "1,234,567");
-    assert_eq!(format_with_id_default(-1234.0, 3).unwrap(), "-1,234");
+    assert_eq!(plain(format_with_id_default(0.0, 3).unwrap()), "0");
+    assert_eq!(plain(format_with_id_default(999.0, 3).unwrap()), "999");
+    assert_eq!(plain(format_with_id_default(1000.0, 3).unwrap()), "1,000");
+    assert_eq!(
+        plain(format_with_id_default(1234567.0, 3).unwrap()),
+        "1,234,567"
+    );
+    assert_eq!(plain(format_with_id_default(-1234.0, 3).unwrap()), "-1,234");
 }
 
 /// Test built-in format ID 4 (#,##0.00)
 #[test]
 fn test_format_id_4_thousands_decimals() {
-    assert_eq!(format_with_id_default(0.0, 4).unwrap(), "0.00");
-    assert_eq!(format_with_id_default(1234.56, 4).unwrap(), "1,234.56");
+    assert_eq!(plain(format_with_id_default(0.0, 4).unwrap()), "0.00");
     assert_eq!(
-        format_with_id_default(1234567.89, 4).unwrap(),
+        plain(format_with_id_default(1234.56, 4).unwrap()),
+        "1,234.56"
+    );
+    assert_eq!(
+        plain(format_with_id_default(1234567.89, 4).unwrap()),
         "1,234,567.89"
     );
-    assert_eq!(format_with_id_default(-1000.5, 4).unwrap(), "-1,000.50");
+    assert_eq!(
+        plain(format_with_id_default(-1000.5, 4).unwrap()),
+        "-1,000.50"
+    );
 }
 
 /// Test built-in format ID 9 (0%)
 #[test]
 fn test_format_id_9_percent() {
-    assert_eq!(format_with_id_default(0.0, 9).unwrap(), "0%");
-    assert_eq!(format_with_id_default(0.5, 9).unwrap(), "50%");
-    assert_eq!(format_with_id_default(1.0, 9).unwrap(), "100%");
-    assert_eq!(format_with_id_default(0.125, 9).unwrap(), "13%"); // Rounds to 13%
-    assert_eq!(format_with_id_default(-0.25, 9).unwrap(), "-25%");
+    assert_eq!(plain(format_with_id_default(0.0, 9).unwrap()), "0%");
+    assert_eq!(plain(format_with_id_default(0.5, 9).unwrap()), "50%");
+    assert_eq!(plain(format_with_id_default(1.0, 9).unwrap()), "100%");
+    assert_eq!(plain(format_with_id_default(0.125, 9).unwrap()), "13%"); // Rounds to 13%
+    assert_eq!(plain(format_with_id_default(-0.25, 9).unwrap()), "-25%");
 }
 
 /// Test built-in format ID 10 (0.00%)
 #[test]
 fn test_format_id_10_percent_decimals() {
-    assert_eq!(format_with_id_default(0.0, 10).unwrap(), "0.00%");
-    assert_eq!(format_with_id_default(0.5, 10).unwrap(), "50.00%");
-    assert_eq!(format_with_id_default(0.125, 10).unwrap(), "12.50%");
-    assert_eq!(format_with_id_default(1.2345, 10).unwrap(), "123.45%");
+    assert_eq!(plain(format_with_id_default(0.0, 10).unwrap()), "0.00%");
+    assert_eq!(plain(format_with_id_default(0.5, 10).unwrap()), "50.00%");
+    assert_eq!(plain(format_with_id_default(0.125, 10).unwrap()), "12.50%");
+    assert_eq!(
+        plain(format_with_id_default(1.2345, 10).unwrap()),
+        "123.45%"
+    );
 }
 
 /// Test built-in format ID 11 (0.00E+00)

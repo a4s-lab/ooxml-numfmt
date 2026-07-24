@@ -4,9 +4,10 @@
 //! For values within the safe range, the regular f64 formatting path is used.
 //! For values outside the safe range, string-based arithmetic is used to preserve precision.
 
-use crate::ast::{FormatPart, Section};
+use crate::ast::Section;
 use crate::error::FormatError;
 use crate::options::FormatOptions;
+use crate::output::{output_for_part, FormatOutput};
 use num_bigint::BigInt;
 
 /// The maximum safe integer value for f64 (2^53 - 1)
@@ -29,7 +30,7 @@ pub fn format_bigint(
     value: &BigInt,
     section: &Section,
     opts: &FormatOptions,
-) -> Result<String, FormatError> {
+) -> Result<Vec<FormatOutput>, FormatError> {
     // Check if value is within safe f64 range
     if is_safe_integer(value) {
         // Convert to f64 and use standard formatting
@@ -47,7 +48,7 @@ fn format_large_bigint(
     value: &BigInt,
     section: &Section,
     opts: &FormatOptions,
-) -> Result<String, FormatError> {
+) -> Result<Vec<FormatOutput>, FormatError> {
     use num_bigint::Sign;
 
     let is_negative = value.sign() == Sign::Minus;
@@ -92,37 +93,12 @@ fn format_large_bigint(
         formatted_integer
     };
 
-    // Build prefix
-    let mut result = String::new();
-    for part in &analysis.prefix_parts {
-        match part {
-            FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => result.push_str(s),
-            FormatPart::Locale(locale_code) => {
-                if let Some(ref currency) = locale_code.currency {
-                    result.push_str(currency);
-                }
-            }
-            FormatPart::Percent => result.push('%'),
-            _ => {}
-        }
-    }
+    let capacity = analysis.prefix_parts.len() + analysis.suffix_parts.len() + 1;
+    let mut result = Vec::with_capacity(capacity);
 
-    // Add the formatted number
-    result.push_str(&formatted);
-
-    // Build suffix
-    for part in &analysis.suffix_parts {
-        match part {
-            FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => result.push_str(s),
-            FormatPart::Locale(locale_code) => {
-                if let Some(ref currency) = locale_code.currency {
-                    result.push_str(currency);
-                }
-            }
-            FormatPart::Percent => result.push('%'),
-            _ => {}
-        }
-    }
+    result.extend(analysis.prefix_parts.iter().filter_map(output_for_part));
+    result.push(FormatOutput::Text(formatted));
+    result.extend(analysis.suffix_parts.iter().filter_map(output_for_part));
 
     Ok(result)
 }

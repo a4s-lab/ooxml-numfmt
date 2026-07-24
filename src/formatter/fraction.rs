@@ -4,6 +4,7 @@ use crate::ast::{DigitPlaceholder, FormatPart, FractionDenom, Section};
 use crate::error::FormatError;
 use crate::formatter::number::format_simple_with_placeholders;
 use crate::options::FormatOptions;
+use crate::output::{output_for_part, FormatOutput};
 
 /// Format a fraction part (numerator or denominator) with digit placeholders.
 /// Uses the unified placeholder formatting helper from number.rs.
@@ -16,7 +17,7 @@ pub fn format_fraction(
     value: f64,
     section: &Section,
     _opts: &FormatOptions,
-) -> Result<String, FormatError> {
+) -> Result<Vec<FormatOutput>, FormatError> {
     // Find the fraction part in the section
     let fraction_part = section.parts.iter().find_map(|p| {
         if let FormatPart::Fraction {
@@ -209,7 +210,16 @@ pub fn format_fraction(
         }
     }
 
-    Ok(result)
+    let mut output = Vec::with_capacity(section.parts.len());
+    for part in &section.parts {
+        if matches!(part, FormatPart::Fraction { .. }) {
+            output.push(FormatOutput::Text(result.clone()));
+        } else if let Some(part) = output_for_part(part) {
+            output.push(part);
+        }
+    }
+
+    Ok(output)
 }
 
 /// Find the best fraction approximation for a decimal value.

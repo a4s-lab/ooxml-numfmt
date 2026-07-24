@@ -5,17 +5,18 @@ use crate::date_serial::{serial_to_date, serial_to_weekday};
 use crate::error::FormatError;
 use crate::locale::Locale;
 use crate::options::FormatOptions;
+use crate::output::FormatOutput;
 
 /// Format a value as a date/time using the given section.
 pub fn format_date(
     value: f64,
     section: &Section,
     opts: &FormatOptions,
-) -> Result<String, FormatError> {
-    // SSF returns empty string for out-of-range dates (< 0 or > 2958465)
+) -> Result<Vec<FormatOutput>, FormatError> {
+    // SSF returns empty output for out-of-range dates (< 0 or > 2958465)
     // This matches Excel's behavior - see bits/35_datecode.js line 2
     if !(0.0..=2958465.0).contains(&value) {
-        return Ok(String::new());
+        return Ok(Vec::new());
     }
 
     // Use pre-computed metadata instead of scanning parts
@@ -109,8 +110,8 @@ pub fn format_date(
     // Even for value 0, Excel calculates it as Saturday (day before Jan 1, 1900)
     let weekday = serial_to_weekday(value, opts.date_system);
 
-    // Build the formatted string
-    let mut result = String::new();
+    // Each format part emits at most one output element.
+    let mut result = Vec::with_capacity(section.parts.len());
 
     for part in &section.parts {
         match part {
@@ -129,34 +130,32 @@ pub fn format_date(
                     has_multiple_subseconds,
                     &opts.locale,
                 );
-                result.push_str(&formatted);
+                result.push(FormatOutput::Text(formatted));
             }
             FormatPart::AmPm(style) => {
                 let formatted = format_ampm(*style, hour, &opts.locale);
-                result.push_str(&formatted);
+                result.push(FormatOutput::Text(formatted));
             }
             FormatPart::Elapsed(elapsed_part) => {
                 let formatted = format_elapsed(*elapsed_part, adjusted_value);
-                result.push_str(&formatted);
+                result.push(FormatOutput::Text(formatted));
             }
             FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => {
-                result.push_str(s);
+                result.push(FormatOutput::Text(s.clone()));
             }
-            FormatPart::Skip(c) => {
-                // Skip width of character - add a space for alignment
-                result.push(*c);
-            }
-            FormatPart::Fill(_) => {
-                // Fill characters are handled at a higher level
-                // For now, just skip
-            }
+            FormatPart::Skip(c) => result.push(FormatOutput::Skip(*c)),
+            FormatPart::Fill(c) => result.push(FormatOutput::Fill(*c)),
             FormatPart::ThousandsSeparator => {
                 // In date formats, the thousands separator (,) is just a literal comma
-                result.push(opts.locale.thousands_separator);
+                result.push(FormatOutput::Text(
+                    opts.locale.thousands_separator.to_string(),
+                ));
             }
             FormatPart::DecimalPoint => {
                 // In date formats, the decimal point is just a literal
-                result.push(opts.locale.decimal_separator);
+                result.push(FormatOutput::Text(
+                    opts.locale.decimal_separator.to_string(),
+                ));
             }
             _ => {
                 // Other parts (e.g., numeric) are not expected in date formats

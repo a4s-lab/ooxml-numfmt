@@ -3,7 +3,7 @@
 //! These tests verify that ooxml-numfmt correctly implements Excel's fraction
 //! formats like "# ?/?", "# ??/??", etc.
 
-use ooxml_numfmt::format_default;
+use ooxml_numfmt::{format_default, plain_text};
 use serde_json::Value;
 
 #[derive(Debug)]
@@ -49,7 +49,8 @@ fn test_ssf_fractions() {
 
     for (i, test) in test_cases.iter().enumerate() {
         match format_default(test.value, &test.format_code) {
-            Ok(result) => {
+            Ok(parts) => {
+                let result = plain_text(&parts);
                 if result == test.expected {
                     passed += 1;
                 } else {

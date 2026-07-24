@@ -8,17 +8,37 @@
 //! ## Quick Start
 //!
 //! ```rust
-//! use ooxml_numfmt::{format_default, NumberFormat, FormatOptions};
+//! use ooxml_numfmt::{plain_text, format_default, NumberFormat, FormatOptions};
 //!
 //! // One-off formatting
 //! let result = format_default(1234.56, "#,##0.00").unwrap();
-//! assert_eq!(result, "1,234.56");
+//! assert_eq!(plain_text(&result), "1,234.56");
 //!
 //! // Compile once, format many
 //! let fmt = NumberFormat::parse("#,##0.00").unwrap();
 //! let opts = FormatOptions::default();
-//! assert_eq!(fmt.format(1234.56, &opts), "1,234.56");
-//! assert_eq!(fmt.format(9876.54, &opts), "9,876.54");
+//! assert_eq!(plain_text(&fmt.format(1234.56, &opts)), "1,234.56");
+//! assert_eq!(plain_text(&fmt.format(9876.54, &opts)), "9,876.54");
+//! ```
+//!
+//! ## Structured Output
+//!
+//! Formatting returns a [`Vec<FormatOutput>`] so renderers can preserve colors,
+//! fill characters, and reserved spacing. Use [`plain_text`] when only text is needed.
+//!
+//! ```rust
+//! use ooxml_numfmt::{
+//!     ast::{Color, NamedColor},
+//!     format_default, plain_text, FormatOutput,
+//! };
+//!
+//! let output = format_default(1234.56, "[Red]#,##0.00*.").unwrap();
+//! assert_eq!(output, vec![
+//!     FormatOutput::Color(Color::Named(NamedColor::Red)),
+//!     FormatOutput::Text("1,234.56".into()),
+//!     FormatOutput::Fill('.'),
+//! ]);
+//! assert_eq!(plain_text(&output), "1,234.56");
 //! ```
 //!
 //! ## Format Code Syntax
@@ -59,6 +79,7 @@ mod hijri;
 mod cache;
 mod formatter;
 mod locale;
+mod output;
 pub mod parser;
 
 // Re-exports will be added once types are defined:
@@ -67,6 +88,7 @@ pub use builtin_formats::{format_code_from_id, is_builtin_format_id};
 pub use error::{FormatError, ParseError};
 pub use locale::Locale;
 pub use options::{DateSystem, FormatOptions};
+pub use output::{plain_text, FormatOutput};
 pub use value::Value;
 
 // Convenience functions
@@ -74,7 +96,11 @@ pub use value::Value;
 /// Parse and format a value in one call.
 ///
 /// This function caches recently used format codes for efficiency.
-pub fn format(value: f64, format_code: &str, opts: &FormatOptions) -> Result<String, ParseError> {
+pub fn format(
+    value: f64,
+    format_code: &str,
+    opts: &FormatOptions,
+) -> Result<Vec<FormatOutput>, ParseError> {
     let fmt = cache::get_or_parse(format_code)?;
     Ok(fmt.format(value, opts))
 }
@@ -82,7 +108,7 @@ pub fn format(value: f64, format_code: &str, opts: &FormatOptions) -> Result<Str
 /// Format a value with default options (1900 date system, en-US locale).
 ///
 /// This function caches recently used format codes for efficiency.
-pub fn format_default(value: f64, format_code: &str) -> Result<String, ParseError> {
+pub fn format_default(value: f64, format_code: &str) -> Result<Vec<FormatOutput>, ParseError> {
     let opts = FormatOptions::default();
     format(value, format_code, &opts)
 }
@@ -98,22 +124,24 @@ pub fn format_default(value: f64, format_code: &str) -> Result<String, ParseErro
 /// * `opts` - Format options (date system, locale)
 ///
 /// # Returns
-/// * `Ok(String)` - The formatted value
+/// * `Ok(Vec<FormatOutput>)` - The formatted value
 /// * `Err(ParseError::InvalidFormatId)` - If the format ID is not a recognized built-in format
 ///
 /// # Examples
 /// ```
-/// use ooxml_numfmt::{format_with_id, FormatOptions};
+/// use ooxml_numfmt::{plain_text, format_with_id, FormatOptions};
 ///
 /// let opts = FormatOptions::default();
-/// assert_eq!(format_with_id(1234.56, 0, &opts).unwrap(), "1234.56"); // General
-/// assert_eq!(format_with_id(1234.56, 2, &opts).unwrap(), "1234.56"); // 0.00
+/// let general = format_with_id(1234.56, 0, &opts).unwrap();
+/// let decimal = format_with_id(1234.56, 2, &opts).unwrap();
+/// assert_eq!(plain_text(&general), "1234.56"); // General
+/// assert_eq!(plain_text(&decimal), "1234.56"); // 0.00
 /// ```
 pub fn format_with_id(
     value: f64,
     format_id: u32,
     opts: &FormatOptions,
-) -> Result<String, ParseError> {
+) -> Result<Vec<FormatOutput>, ParseError> {
     let format_code =
         format_code_from_id(format_id).ok_or(ParseError::InvalidFormatId(format_id))?;
     format(value, format_code, opts)
@@ -126,12 +154,14 @@ pub fn format_with_id(
 ///
 /// # Examples
 /// ```
-/// use ooxml_numfmt::format_with_id_default;
+/// use ooxml_numfmt::{plain_text, format_with_id_default};
 ///
-/// assert_eq!(format_with_id_default(1234.56, 0).unwrap(), "1234.56"); // General
-/// assert_eq!(format_with_id_default(0.5, 10).unwrap(), "50.00%"); // 0.00%
+/// let general = format_with_id_default(1234.56, 0).unwrap();
+/// let percent = format_with_id_default(0.5, 10).unwrap();
+/// assert_eq!(plain_text(&general), "1234.56"); // General
+/// assert_eq!(plain_text(&percent), "50.00%"); // 0.00%
 /// ```
-pub fn format_with_id_default(value: f64, format_id: u32) -> Result<String, ParseError> {
+pub fn format_with_id_default(value: f64, format_id: u32) -> Result<Vec<FormatOutput>, ParseError> {
     let opts = FormatOptions::default();
     format_with_id(value, format_id, &opts)
 }
@@ -152,19 +182,19 @@ pub use num_bigint::BigInt;
 ///
 /// # Example
 /// ```ignore
-/// use ooxml_numfmt::{format_bigint, BigInt, FormatOptions};
+/// use ooxml_numfmt::{plain_text, format_bigint, BigInt, FormatOptions};
 ///
 /// let big = BigInt::parse_bytes(b"123456822333333000", 10).unwrap();
 /// let opts = FormatOptions::default();
 /// let result = format_bigint(&big, "#,##0", &opts).unwrap();
-/// assert_eq!(result, "123,456,822,333,333,000");
+/// assert_eq!(plain_text(&result), "123,456,822,333,333,000");
 /// ```
 #[cfg(feature = "bigint")]
 pub fn format_bigint(
     value: &num_bigint::BigInt,
     format_code: &str,
     opts: &FormatOptions,
-) -> Result<String, ParseError> {
+) -> Result<Vec<FormatOutput>, ParseError> {
     let fmt = cache::get_or_parse(format_code)?;
     Ok(fmt.format_bigint(value, opts))
 }
@@ -177,7 +207,7 @@ pub fn format_bigint(
 pub fn format_bigint_default(
     value: &num_bigint::BigInt,
     format_code: &str,
-) -> Result<String, ParseError> {
+) -> Result<Vec<FormatOutput>, ParseError> {
     let opts = FormatOptions::default();
     format_bigint(value, format_code, &opts)
 }
