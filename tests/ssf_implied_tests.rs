@@ -1,11 +1,11 @@
 //! Tests from SheetJS ssf library's implied.json test suite
 //!
-//! These tests verify that ssfmt correctly implements Excel's built-in
+//! These tests verify that ooxml-numfmt correctly implements Excel's built-in
 //! format IDs (0-49). Each test case provides a value and expected outputs
 //! for all built-in format IDs.
 
 use serde_json::Value;
-use ssfmt::format_with_id_default;
+use ooxml_numfmt::format_with_id_default;
 
 #[derive(Debug)]
 struct ImpliedTestCase {

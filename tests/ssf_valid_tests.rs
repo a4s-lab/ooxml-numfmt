@@ -4,7 +4,7 @@
 //! without crashing. They don't check the output, just that formatting
 //! doesn't fail.
 
-use ssfmt::format_default;
+use ooxml_numfmt::format_default;
 use flate2::read::GzDecoder;
 use std::io::Read;
 

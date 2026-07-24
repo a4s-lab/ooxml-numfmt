@@ -21,7 +21,7 @@
 ///
 /// # Examples
 /// ```
-/// use ssfmt::format_code_from_id;
+/// use ooxml_numfmt::format_code_from_id;
 ///
 /// assert_eq!(format_code_from_id(0), Some("General"));
 /// assert_eq!(format_code_from_id(1), Some("0"));
@@ -71,7 +71,7 @@ pub fn format_code_from_id(id: u32) -> Option<&'static str> {
 ///
 /// # Examples
 /// ```
-/// use ssfmt::is_builtin_format_id;
+/// use ooxml_numfmt::is_builtin_format_id;
 ///
 /// assert!(is_builtin_format_id(0));
 /// assert!(is_builtin_format_id(14));

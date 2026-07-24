@@ -4,7 +4,7 @@
 //! The times.tsv file contains comprehensive tests for time display including
 //! elapsed time formats ([h]:mm:ss), subsecond precision, and various time styles.
 
-use ssfmt::format_default;
+use ooxml_numfmt::format_default;
 use flate2::read::GzDecoder;
 use std::io::Read;
 

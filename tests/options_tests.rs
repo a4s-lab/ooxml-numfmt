@@ -1,4 +1,4 @@
-use ssfmt::{DateSystem, FormatOptions};
+use ooxml_numfmt::{DateSystem, FormatOptions};
 
 #[test]
 fn test_default_options() {

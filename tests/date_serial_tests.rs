@@ -1,5 +1,5 @@
-use ssfmt::date_serial::{date_to_serial, serial_to_date};
-use ssfmt::DateSystem;
+use ooxml_numfmt::date_serial::{date_to_serial, serial_to_date};
+use ooxml_numfmt::DateSystem;
 
 #[test]
 fn test_serial_to_date_1900_basic() {
@@ -32,11 +32,11 @@ fn test_serial_to_date_known_date() {
 #[test]
 fn test_serial_to_time() {
     // 0.5 = 12:00:00 (noon)
-    let (h, m, s) = ssfmt::date_serial::serial_to_time(0.5);
+    let (h, m, s) = ooxml_numfmt::date_serial::serial_to_time(0.5);
     assert_eq!((h, m, s), (12, 0, 0));
 
     // 0.75 = 18:00:00 (6 PM)
-    let (h, m, s) = ssfmt::date_serial::serial_to_time(0.75);
+    let (h, m, s) = ooxml_numfmt::date_serial::serial_to_time(0.75);
     assert_eq!((h, m, s), (18, 0, 0));
 }
 

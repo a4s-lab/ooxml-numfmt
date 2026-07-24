@@ -3,7 +3,7 @@
 //! These tests verify comma-based number formatting including thousands
 //! separators and comma divisors (,, = millions, ,,, = billions, etc.)
 
-use ssfmt::format_default;
+use ooxml_numfmt::format_default;
 use flate2::read::GzDecoder;
 use std::io::Read;
 

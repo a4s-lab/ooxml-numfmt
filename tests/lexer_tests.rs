@@ -1,7 +1,7 @@
 //! Tests for the format code lexer.
 
-use ssfmt::parser::lexer::Lexer;
-use ssfmt::parser::tokens::Token;
+use ooxml_numfmt::parser::lexer::Lexer;
+use ooxml_numfmt::parser::tokens::Token;
 
 #[test]
 fn test_lex_simple_number_format() {

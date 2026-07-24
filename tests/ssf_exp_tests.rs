@@ -3,7 +3,7 @@
 //! These tests verify exponential/scientific notation formatting with
 //! different numbers of integer digits before the decimal point.
 
-use ssfmt::format_default;
+use ooxml_numfmt::format_default;
 use flate2::read::GzDecoder;
 use std::io::Read;
 

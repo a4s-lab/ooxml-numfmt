@@ -1,4 +1,4 @@
-use ssfmt::{format_default, NumberFormat};
+use ooxml_numfmt::{format_default, NumberFormat};
 
 #[test]
 fn test_general_format_parse() {

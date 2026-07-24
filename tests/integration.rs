@@ -1,6 +1,6 @@
-//! Integration tests for ssfmt - comprehensive tests covering realistic Excel format codes.
+//! Integration tests for ooxml-numfmt - comprehensive tests covering realistic Excel format codes.
 
-use ssfmt::{DateSystem, FormatOptions, NumberFormat};
+use ooxml_numfmt::{DateSystem, FormatOptions, NumberFormat};
 
 // ============================================================================
 // Number Formats
@@ -9,7 +9,7 @@ use ssfmt::{DateSystem, FormatOptions, NumberFormat};
 #[test]
 fn test_general_number() {
     // "General" format - in Excel this means "display as-is" but it's not a standard format code
-    // The ssfmt parser treats it as literal text "General", which is technically correct parsing.
+    // The ooxml-numfmt parser treats it as literal text "General", which is technically correct parsing.
     // We test the more commonly-used explicit format "0" instead.
     let fmt = NumberFormat::parse("0").unwrap();
     let opts = FormatOptions::default();

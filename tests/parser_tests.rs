@@ -1,7 +1,7 @@
 //! Tests for the format code parser.
 
-use ssfmt::ast::{Color, DatePart, FormatPart, NamedColor};
-use ssfmt::NumberFormat;
+use ooxml_numfmt::ast::{Color, DatePart, FormatPart, NamedColor};
+use ooxml_numfmt::NumberFormat;
 
 #[test]
 fn test_parse_simple_number() {

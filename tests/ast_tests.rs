@@ -1,5 +1,5 @@
-use ssfmt::ast::{Condition, DatePart, DigitPlaceholder, FormatPart, NamedColor, Section};
-use ssfmt::NumberFormat;
+use ooxml_numfmt::ast::{Condition, DatePart, DigitPlaceholder, FormatPart, NamedColor, Section};
+use ooxml_numfmt::NumberFormat;
 
 #[test]
 fn test_named_color_from_str() {
@@ -43,7 +43,7 @@ fn test_number_format_is_date_format() {
             FormatPart::Literal("-".into()),
             FormatPart::DatePart(DatePart::Month2),
         ],
-        metadata: ssfmt::ast::SectionMetadata::default(),
+        metadata: ooxml_numfmt::ast::SectionMetadata::default(),
     };
     let format = NumberFormat::from_sections(vec![section]);
     assert!(format.is_date_format());
@@ -56,7 +56,7 @@ fn test_number_format_sections_limit() {
             condition: None,
             color: None,
             parts: vec![],
-            metadata: ssfmt::ast::SectionMetadata::default(),
+            metadata: ooxml_numfmt::ast::SectionMetadata::default(),
         })
         .collect();
     // Should only keep first 4 sections

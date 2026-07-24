@@ -1,4 +1,4 @@
-use ssfmt::{format_with_id_default, format_code_from_id};
+use ooxml_numfmt::{format_with_id_default, format_code_from_id};
 
 /// Test built-in format ID 0 (General)
 #[test]

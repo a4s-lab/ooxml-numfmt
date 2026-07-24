@@ -3,7 +3,7 @@
 //! These tests verify date formatting across various format codes and date values.
 //! The dates.tsv file contains comprehensive tests for date display in different styles.
 
-use ssfmt::format_default;
+use ooxml_numfmt::format_default;
 use flate2::read::GzDecoder;
 use std::io::Read;
 

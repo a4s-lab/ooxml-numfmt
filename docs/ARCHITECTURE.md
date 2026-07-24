@@ -1,20 +1,22 @@
-# ssfmt Architecture
+# ooxml-numfmt Architecture
 
-This document describes the architecture of ssfmt and key design decisions based on learnings from the SheetJS SSF reference implementation.
+This document describes the architecture of ooxml-numfmt and key design decisions based on learnings from the SheetJS SSF reference implementation.
 
 ## Overview
 
-ssfmt is a Rust implementation of Excel/ECMA-376 number formatting that achieves 99.9999% compatibility with SheetJS SSF across 19.5+ million test cases.
+ooxml-numfmt is a Rust implementation of Excel/ECMA-376 number formatting that achieves 99.9999% compatibility with SheetJS SSF across 19.5+ million test cases.
 
 ## Core Design Principles
 
 ### 1. Parse Once, Format Many
 
 The library follows a two-phase design:
+
 - **Parse phase**: Format string → AST with pre-computed metadata
 - **Format phase**: Use AST + metadata to format values efficiently
 
 This matches SSF's approach and enables:
+
 - Efficient reuse of compiled formats
 - No repeated scanning of format parts
 - Performance optimization through metadata
@@ -22,6 +24,7 @@ This matches SSF's approach and enables:
 ### 2. Separate Code Paths by Type
 
 Following SSF's design (bits/66_numint.js vs bits/63_numflt.js vs bits/35_datecode.js):
+
 - **Integer path**: i64 arithmetic for exact integers (< 2^53)
 - **Float path**: f64 arithmetic for decimals and large numbers
 - **Date/time path**: Serial number conversion and formatting
@@ -64,6 +67,7 @@ NumberFormat
 ```
 
 Key types:
+
 - `FormatPart`: Enum of all possible format elements (digit, literal, date part, etc.)
 - `SectionMetadata`: Pre-computed characteristics for fast formatting
 - `TimeUnit`: Hierarchy for time pre-rounding (None < Hours < Minutes < Seconds < Subseconds)
@@ -98,17 +102,20 @@ pub fn format_number(value: f64, section: &Section, opts: &FormatOptions)
 ```
 
 **Integer Fast Path**:
+
 - Detects exact integers within safe range (< 2^53)
 - Only used when NO decimal placeholders present
 - Uses i64 arithmetic to avoid precision loss
 - Based on SSF's bits/66_numint.js
 
 **Float Path**:
+
 - Handles all decimal formatting
 - Supports optional vs required placeholders (# vs 0)
 - Handles thousands separators, percent scaling, trailing commas
 
 **Key optimizations**:
+
 - O(n) string building (Vec + reverse instead of insert(0))
 - Exact capacity pre-allocation
 - Unified placeholder formatting helper
@@ -122,11 +129,13 @@ pub fn format_date(value: f64, section: &Section, opts: &FormatOptions)
 ```
 
 **Pre-rounding algorithm** (from SSF bits/82_eval.js):
+
 - Rounds time components based on smallest displayed unit
 - Ensures consistent rounding (e.g., 23:59:59.999 → 24:00 if minutes displayed)
 - Applied uniformly to all time formats (regular and elapsed)
 
 **Special handling**:
+
 - Day 0 (Dec 31, 1899) = Saturday (off-by-one from typical week calculation)
 - Hijri calendar: Subtract 581 years from Gregorian
 - Three-digit year format: Minimum 3 digits
@@ -141,6 +150,7 @@ pub fn format_fraction(value: f64, section: &Section, opts: &FormatOptions)
 ```
 
 **SSF-compliant padding** (from bits/63_numflt.js and bits/30_frac.js):
+
 - Mixed fractions: Space after integer part detection
 - Padding width (`ri`): min(max(numerator_len, denominator_len), 7)
 - Numerator: Left-pad with spaces
@@ -154,6 +164,7 @@ pub fn format_fraction(value: f64, section: &Section, opts: &FormatOptions)
 Handles Excel's date system (days since 1900-01-01):
 
 **Design choice**: Uses simple O(n) year-by-year loop instead of complex O(1) algorithm
+
 - Reasoning: 200 iterations ≈ 0.00005ms (negligible)
 - Benefit: Simple, correct, maintainable code
 - Trade-off analysis: Complexity vs performance gain not justified
@@ -167,6 +178,7 @@ Supports both 1900 and 1904 date systems.
 **Impact**: Eliminates O(n) scans in formatting hot path
 
 Before:
+
 ```rust
 let has_ampm = section.parts.iter().any(|p| matches!(p, FormatPart::AmPm(_)));
 let is_hijri = section.parts.iter().any(...);
@@ -174,6 +186,7 @@ let subsecond_places: Vec<u8> = section.parts.iter().filter_map(...).collect();
 ```
 
 After:
+
 ```rust
 // Computed once during parsing, stored in section.metadata
 if section.metadata.has_ampm { ... }
@@ -185,6 +198,7 @@ if section.metadata.is_hijri { ... }
 **Impact**: Avoids precision loss for large integers
 
 Detects safe integers and uses i64 arithmetic:
+
 ```rust
 const MAX_SAFE_INTEGER: f64 = 9007199254740992.0; // 2^53
 if value.fract() == 0.0
@@ -202,6 +216,7 @@ if value.fract() == 0.0
 **Impact**: Fixed O(n²) performance bugs
 
 Before (O(n²)):
+
 ```rust
 for ch in chars {
     result.insert(0, ch);  // Shifts all existing chars
@@ -209,6 +224,7 @@ for ch in chars {
 ```
 
 After (O(n)):
+
 ```rust
 let mut chars = Vec::with_capacity(estimated_size);
 for ch in chars_to_add {
@@ -276,6 +292,7 @@ Our implementation closely follows SSF's battle-tested algorithms:
 ### Known Limitations
 
 16 remaining test failures, all due to:
+
 - IEEE 754 precision limits (5 tests)
 - Test data errors in SSF test expectations (2 tests)
 - Edge cases in implied format tests (6 tests)
@@ -288,6 +305,7 @@ See `docs/TESTING.md` for detailed test coverage documentation.
 ### Performance
 
 Current optimizations are sufficient for typical use cases. Further optimization opportunities:
+
 - SIMD for digit processing (likely unnecessary)
 - Parallel formatting of multiple values (user can parallelize at call site)
 - Custom allocator for string building (premature)
@@ -295,6 +313,7 @@ Current optimizations are sufficient for typical use cases. Further optimization
 ### Features
 
 Potential future additions:
+
 - Custom format code validation with detailed error messages
 - Format code simplification/normalization
 - Locale-specific formatting beyond basic decimal/thousands separators

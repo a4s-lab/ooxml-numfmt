@@ -1,10 +1,10 @@
 //! Tests from SheetJS ssf library's fraction.json test suite
 //!
-//! These tests verify that ssfmt correctly implements Excel's fraction
+//! These tests verify that ooxml-numfmt correctly implements Excel's fraction
 //! formats like "# ?/?", "# ??/??", etc.
 
 use serde_json::Value;
-use ssfmt::format_default;
+use ooxml_numfmt::format_default;
 
 #[derive(Debug)]
 struct FractionTestCase {

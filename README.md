@@ -1,4 +1,4 @@
-# ssfmt
+# ooxml-numfmt
 
 Excel-compatible ECMA-376 number format codes for Rust.
 
@@ -15,7 +15,7 @@ Excel-compatible ECMA-376 number format codes for Rust.
 ## Usage
 
 ```rust
-use ssfmt::{format_default, NumberFormat, FormatOptions};
+use ooxml_numfmt::{format_default, NumberFormat, FormatOptions};
 
 // Simple one-off formatting
 let result = format_default(1234.56, "#,##0.00").unwrap();

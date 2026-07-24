@@ -1,10 +1,10 @@
 //! Tests from SheetJS ssf library's general.json test suite
 //!
-//! These tests verify that ssfmt matches Excel's "General" number format behavior
+//! These tests verify that ooxml-numfmt matches Excel's "General" number format behavior
 //! as documented and tested by the SheetJS ssf library.
 
 use serde_json::Value;
-use ssfmt::format_with_id_default;
+use ooxml_numfmt::format_with_id_default;
 
 #[derive(Debug)]
 struct TestCase {

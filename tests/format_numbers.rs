@@ -1,4 +1,4 @@
-use ssfmt::{FormatOptions, NumberFormat};
+use ooxml_numfmt::{FormatOptions, NumberFormat};
 
 #[test]
 fn test_format_integer() {

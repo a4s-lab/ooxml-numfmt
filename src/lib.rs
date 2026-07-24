@@ -1,4 +1,4 @@
-//! # ssfmt
+//! # ooxml-numfmt
 //!
 //! Excel-compatible ECMA-376 number format codes for Rust.
 //!
@@ -8,7 +8,7 @@
 //! ## Quick Start
 //!
 //! ```rust
-//! use ssfmt::{format_default, NumberFormat, FormatOptions};
+//! use ooxml_numfmt::{format_default, NumberFormat, FormatOptions};
 //!
 //! // One-off formatting
 //! let result = format_default(1234.56, "#,##0.00").unwrap();
@@ -103,7 +103,7 @@ pub fn format_default(value: f64, format_code: &str) -> Result<String, ParseErro
 ///
 /// # Examples
 /// ```
-/// use ssfmt::{format_with_id, FormatOptions};
+/// use ooxml_numfmt::{format_with_id, FormatOptions};
 ///
 /// let opts = FormatOptions::default();
 /// assert_eq!(format_with_id(1234.56, 0, &opts).unwrap(), "1234.56"); // General
@@ -126,7 +126,7 @@ pub fn format_with_id(
 ///
 /// # Examples
 /// ```
-/// use ssfmt::format_with_id_default;
+/// use ooxml_numfmt::format_with_id_default;
 ///
 /// assert_eq!(format_with_id_default(1234.56, 0).unwrap(), "1234.56"); // General
 /// assert_eq!(format_with_id_default(0.5, 10).unwrap(), "50.00%"); // 0.00%
@@ -152,7 +152,7 @@ pub use num_bigint::BigInt;
 ///
 /// # Example
 /// ```ignore
-/// use ssfmt::{format_bigint, BigInt, FormatOptions};
+/// use ooxml_numfmt::{format_bigint, BigInt, FormatOptions};
 ///
 /// let big = BigInt::parse_bytes(b"123456822333333000", 10).unwrap();
 /// let opts = FormatOptions::default();

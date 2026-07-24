@@ -3,7 +3,7 @@
 //! These tests verify edge cases and unusual formatting behaviors in Excel.
 
 use serde_json::Value;
-use ssfmt::format_default;
+use ooxml_numfmt::format_default;
 
 #[derive(Debug)]
 struct OdditiesTestCase {

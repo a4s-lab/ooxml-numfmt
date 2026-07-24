@@ -79,11 +79,13 @@ All TSV test files are stored as `.tsv.gz` to reduce repository size. Tests auto
 ## Overall Test Coverage
 
 ### Summary Statistics
+
 - **Total test cases**: 19,577,033
 - **Total passing**: 19,577,017
 - **Overall pass rate**: 99.9999%
 
 ### Test Categories
+
 1. ✅ Built-in format IDs (100% of applicable)
 2. ✅ General number formatting (100%)
 3. ✅ Scientific notation (100% of applicable)
@@ -164,23 +166,25 @@ All remaining failures are due to unfixable limitations or test data issues:
 
 ## File Size Savings from Compression
 
-| File | Original | Compressed | Savings |
-|------|----------|------------|---------|
-| comma.tsv | 1.1KB | 319 bytes | 71% |
-| exp.tsv | 2.4KB | 533 bytes | 78% |
-| valid.tsv | 8.8KB | 2.6KB | 70% |
-| dates.tsv | 17MB | 2.1MB | 88% |
-| times.tsv | 74MB | 12MB | 84% |
-| **Total** | **91MB** | **14MB** | **85%** |
+| File      | Original | Compressed | Savings |
+| --------- | -------- | ---------- | ------- |
+| comma.tsv | 1.1KB    | 319 bytes  | 71%     |
+| exp.tsv   | 2.4KB    | 533 bytes  | 78%     |
+| valid.tsv | 8.8KB    | 2.6KB      | 70%     |
+| dates.tsv | 17MB     | 2.1MB      | 88%     |
+| times.tsv | 74MB     | 12MB       | 84%     |
+| **Total** | **91MB** | **14MB**   | **85%** |
 
 ## Running Tests
 
 Run all SSF tests:
+
 ```bash
 cargo test ssf_ -- --nocapture
 ```
 
 Run specific test suites:
+
 ```bash
 cargo test --test ssf_dates_tests -- --nocapture
 cargo test --test ssf_times_tests -- --nocapture
@@ -229,6 +233,7 @@ Starting from 94.5% pass rate (18,498,025/19,577,190), we achieved:
 **99.9999% pass rate (19,577,017/19,577,033)**
 
 Only 16 remaining failures, all due to:
+
 - Unfixable floating-point precision limits (5)
 - Test data errors where expectations don't match SSF (2)
 - Edge cases in implied format tests (6)

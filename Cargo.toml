@@ -1,10 +1,10 @@
 [package]
-name = "ssfmt"
+name = "ooxml-numfmt"
 version = "0.1.2"
 edition = "2021"
 description = "Excel-compatible ECMA-376 number format codes"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/ketbra/ssfmt"
+repository = "https://github.com/a4s-lab/ooxml-numfmt"
 keywords = ["excel", "spreadsheet", "formatting", "ecma-376"]
 categories = ["parsing", "text-processing"]
 

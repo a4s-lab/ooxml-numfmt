@@ -1,4 +1,4 @@
-use ssfmt::ParseError;
+use ooxml_numfmt::ParseError;
 
 #[test]
 fn test_parse_error_display() {

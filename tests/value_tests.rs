@@ -1,4 +1,4 @@
-use ssfmt::Value;
+use ooxml_numfmt::Value;
 
 #[test]
 fn test_value_from_f64() {
