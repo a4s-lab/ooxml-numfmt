@@ -753,8 +753,9 @@ fn format_scientific(
         };
         let exp_char = if upper { 'E' } else { 'e' };
         let sign = if show_plus { "+" } else { "" };
-        let formatted = format!("0{}{}{sign}00", decimal_part, exp_char);
-        return compose_scientific_output(section, formatted);
+        let mantissa = format!("0{}", decimal_part);
+        let exponent = format!("{}{sign}00", exp_char);
+        return compose_scientific_output(section, mantissa, exponent);
     }
 
     // Calculate exponent based on integer placeholder count
@@ -804,51 +805,72 @@ fn format_scientific(
         // ##0.0E+0 format uses minimal digits
         format!("{}", exp_abs)
     };
-    let formatted = format!("{}{}{}{}", mantissa_str, exp_char, exp_sign, exp_str);
-
     // Apply sign for negative values.
-    let formatted = if value < 0.0 {
-        format!("-{}", formatted)
+    let mantissa = if value < 0.0 {
+        format!("-{}", mantissa_str)
     } else {
-        formatted
+        mantissa_str
     };
+    let exponent = format!("{}{}{}", exp_char, exp_sign, exp_str);
 
-    compose_scientific_output(section, formatted)
+    compose_scientific_output(section, mantissa, exponent)
 }
 
 fn compose_scientific_output(
     section: &Section,
-    formatted: String,
+    mantissa: String,
+    exponent: String,
 ) -> Result<Vec<FormatOutput>, FormatError> {
-    let first_digit = section
+    let scientific_index = section
         .parts
+        .iter()
+        .position(|part| matches!(part, FormatPart::Scientific { .. }))
+        .ok_or(FormatError::TypeMismatch {
+            expected: "scientific format",
+            got: "scientific format without exponent marker",
+        })?;
+    let first_mantissa_digit = section.parts[..scientific_index]
         .iter()
         .position(|part| matches!(part, FormatPart::Digit(_)))
         .ok_or(FormatError::TypeMismatch {
             expected: "scientific format",
-            got: "scientific format without digit placeholders",
+            got: "scientific format without mantissa digit placeholders",
         })?;
-    let last_digit = section
-        .parts
+    let last_mantissa_digit = section.parts[..scientific_index]
         .iter()
         .rposition(|part| matches!(part, FormatPart::Digit(_)))
         .ok_or(FormatError::TypeMismatch {
             expected: "scientific format",
-            got: "scientific format without digit placeholders",
+            got: "scientific format without mantissa digit placeholders",
+        })?;
+    let last_exponent_digit = section.parts[scientific_index + 1..]
+        .iter()
+        .rposition(|part| matches!(part, FormatPart::Digit(_)))
+        .map(|index| scientific_index + 1 + index)
+        .ok_or(FormatError::TypeMismatch {
+            expected: "scientific format",
+            got: "scientific format without exponent digit placeholders",
         })?;
 
-    let prefix_len = first_digit;
-    let suffix_len = section.parts.len().saturating_sub(last_digit + 1);
-    let mut result = Vec::with_capacity(prefix_len + suffix_len + 1);
+    let prefix_len = first_mantissa_digit;
+    let infix_len = scientific_index.saturating_sub(last_mantissa_digit + 1);
+    let suffix_len = section.parts.len().saturating_sub(last_exponent_digit + 1);
+    let mut result = Vec::with_capacity(prefix_len + infix_len + suffix_len + 2);
 
     result.extend(
-        section.parts[..first_digit]
+        section.parts[..first_mantissa_digit]
             .iter()
             .filter_map(output_for_part),
     );
-    result.push(FormatOutput::Text(formatted));
+    result.push(FormatOutput::Text(mantissa));
     result.extend(
-        section.parts[last_digit.saturating_add(1)..]
+        section.parts[last_mantissa_digit + 1..scientific_index]
+            .iter()
+            .filter_map(output_for_part),
+    );
+    result.push(FormatOutput::Text(exponent));
+    result.extend(
+        section.parts[last_exponent_digit + 1..]
             .iter()
             .filter_map(output_for_part),
     );

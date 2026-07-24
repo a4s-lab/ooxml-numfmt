@@ -49,6 +49,22 @@ fn preserves_fill_after_an_integer_format() {
 }
 
 #[test]
+fn preserves_fill_between_scientific_mantissa_and_exponent() {
+    let format = NumberFormat::parse("0.00* E+00").unwrap();
+    let parts = format.format(12.34, &FormatOptions::default());
+
+    assert_eq!(
+        parts,
+        vec![
+            FormatOutput::Text("1.23".to_string()),
+            FormatOutput::Fill(' '),
+            FormatOutput::Text("E+01".to_string()),
+        ]
+    );
+    assert_eq!(plain_text(&parts), "1.23E+01");
+}
+
+#[test]
 fn date_skip_reserves_width_instead_of_displaying_character() {
     let format = NumberFormat::parse("yyyy_)").unwrap();
     let parts = format.format(46031.0, &FormatOptions::default());
