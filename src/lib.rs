@@ -11,7 +11,7 @@
 //! use ooxml_numfmt::{format_default, NumberFormat, FormatOptions};
 //!
 //! // One-off formatting
-//! let result = fomat_default(1234.56, "#,##0.00").unwrap();
+//! let result = format_default(1234.56, "#,##0.00").unwrap();
 //! assert_eq!(result, "1,234.56");
 //!
 //! // Compile once, format many
