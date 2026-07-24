@@ -1,6 +1,6 @@
 # ooxml-numfmt
 
-Excel-compatible ECMA-376 number format codes for Rust.
+Excel-compatible ECMA-376 number format codes for Rust, forked from [ssfmt](https://github.com/ketbra/ssfmt).
 
 ## Features
 
@@ -27,11 +27,11 @@ let opts = FormatOptions::default();
 assert_eq!(fmt.format(46031.0, &opts), "2026-01-09");
 ```
 
-## Compatibility
+## Testing
 
-Achieves **99.9999% compatibility** with SheetJS SSF across 19.5+ million test cases.
+ssfmt was inspired by SheetJS SSF, so this fork keeps its SSF-based compatibility tests. The suite covers 19.5+ million cases, with 99.9906% of evaluated cases passing.
 
-See [docs/TESTING.md](docs/TESTING.md) for detailed test coverage.
+See [docs/TESTING.md](docs/TESTING.md) for details.
 
 ## License
 
