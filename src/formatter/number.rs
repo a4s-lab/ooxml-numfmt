@@ -263,16 +263,12 @@ pub fn format_number(
     opts: &FormatOptions,
 ) -> Result<Vec<FormatOutput>, FormatError> {
     // Check if this is scientific notation
-    let scientific_part = section.parts.iter().find_map(|p| {
-        if let FormatPart::Scientific { upper, show_plus } = p {
-            Some((*upper, *show_plus))
-        } else {
-            None
-        }
-    });
-
-    if let Some((upper, show_plus)) = scientific_part {
-        return format_scientific(value, section, upper, show_plus, opts);
+    if section
+        .parts
+        .iter()
+        .any(|part| matches!(part, FormatPart::Scientific { .. }))
+    {
+        return format_scientific(value, section);
     }
 
     // Use pre-computed format type from metadata for better performance
@@ -517,6 +513,147 @@ fn format_integer(
     )
 }
 
+/// Format a number in scientific notation according to a format section.
+fn format_scientific(value: f64, section: &Section) -> Result<Vec<FormatOutput>, FormatError> {
+    let scientific_index = section
+        .parts
+        .iter()
+        .position(|part| matches!(part, FormatPart::Scientific { .. }))
+        .ok_or(FormatError::TypeMismatch {
+            expected: "scientific format",
+            got: "scientific format without exponent marker",
+        })?;
+
+    let mantissa_parts = &section.parts[..scientific_index];
+    let exponent_pattern = &section.parts[scientific_index + 1..];
+    let (upper, show_plus) = match &section.parts[scientific_index] {
+        FormatPart::Scientific { upper, show_plus } => (*upper, *show_plus),
+        _ => unreachable!("scientific_index must point to a scientific part"),
+    };
+
+    let (integer_pattern, decimal_pattern) = match mantissa_parts
+        .iter()
+        .position(|part| matches!(part, FormatPart::DecimalPoint))
+    {
+        Some(index) => (&mantissa_parts[..index], Some(&mantissa_parts[index + 1..])),
+        None => (mantissa_parts, None),
+    };
+
+    // Placeholder counts control mantissa precision, engineering grouping, and exponent padding.
+    let mantissa_integer_places = count_digits(integer_pattern);
+    let mantissa_decimal_places = decimal_pattern.map_or(0, count_digits);
+    let exponent_places = count_digits(exponent_pattern);
+
+    if count_digits(mantissa_parts) == 0 {
+        return Err(FormatError::TypeMismatch {
+            expected: "scientific format",
+            got: "scientific format without mantissa digit placeholders",
+        });
+    }
+
+    if exponent_places == 0 {
+        return Err(FormatError::TypeMismatch {
+            expected: "scientific format",
+            got: "scientific format without exponent digit placeholders",
+        });
+    }
+
+    // Normalize the absolute value into a mantissa and exponent. Multiple integer
+    // placeholders use engineering-style exponent groups, such as ##0 with powers of 3.
+    let abs_value = value.abs();
+    let (mantissa, exponent) = if abs_value == 0.0 {
+        (0.0, 0)
+    } else {
+        let base_exponent = abs_value.log10().floor() as i32;
+        let exponent = if mantissa_integer_places > 1 {
+            let group_size = mantissa_integer_places as i32;
+            base_exponent.div_euclid(group_size) * group_size
+        } else {
+            base_exponent
+        };
+
+        (abs_value / 10_f64.powi(exponent), exponent)
+    };
+
+    // Format the mantissa once so rounding is applied before its digits are distributed
+    // across the integer and decimal placeholder runs.
+    let formatted_mantissa = if mantissa_decimal_places > 0 {
+        format!("{mantissa:.mantissa_decimal_places$}")
+    } else {
+        format!("{mantissa:.0}")
+    };
+    let (integer_digits, decimal_digits) = match formatted_mantissa.split_once('.') {
+        Some((integer, decimal)) => (integer.to_string(), Some(decimal.to_string())),
+        None => (formatted_mantissa, None),
+    };
+
+    // Zero keeps the existing two-digit exponent representation. Other exponents are
+    // padded to two digits when the format contains at least two exponent placeholders.
+    let exponent_digits = if abs_value == 0.0 {
+        "00".to_string()
+    } else {
+        let magnitude = exponent.unsigned_abs();
+        if exponent_places >= 2 {
+            format!("{magnitude:02}")
+        } else {
+            magnitude.to_string()
+        }
+    };
+
+    let mut result = Vec::new();
+
+    // Emit the format prefix before the sign. The remaining integer parts start at the
+    // first digit placeholder so inline layout directives stay attached to the digit run.
+    let (prefix_parts, integer_field_pattern) = match integer_pattern
+        .iter()
+        .position(|part| matches!(part, FormatPart::Digit(_)))
+    {
+        Some(index) => (&integer_pattern[..index], Some(&integer_pattern[index..])),
+        None => (integer_pattern, None),
+    };
+
+    for part in prefix_parts {
+        if let Some(part) = output_for_part(part) {
+            push_output(&mut result, part);
+        }
+    }
+
+    if value < 0.0 {
+        push_output(&mut result, FormatOutput::Text("-".to_string()));
+    }
+
+    if let Some(integer_field_pattern) = integer_field_pattern {
+        render_digit_field(&mut result, integer_field_pattern, &integer_digits);
+    } else {
+        push_output(&mut result, FormatOutput::Text(integer_digits));
+    }
+
+    // Render the decimal separator only when formatting produced decimal digits. Any
+    // layout directives after an otherwise empty decimal point are still preserved.
+    if let Some(decimal_pattern) = decimal_pattern {
+        if let Some(decimal_digits) = decimal_digits.as_deref() {
+            push_output(&mut result, FormatOutput::Text(".".to_string()));
+            render_digit_field(&mut result, decimal_pattern, decimal_digits);
+        } else {
+            render_digit_field(&mut result, decimal_pattern, "");
+        }
+    }
+
+    // The marker owns the exponent sign; exponent placeholders receive magnitude only.
+    let marker = if upper { 'E' } else { 'e' };
+    let mut exponent_marker = marker.to_string();
+    if exponent < 0 {
+        exponent_marker.push('-');
+    } else if show_plus {
+        exponent_marker.push('+');
+    }
+
+    push_output(&mut result, FormatOutput::Text(exponent_marker));
+    render_digit_field(&mut result, exponent_pattern, &exponent_digits);
+
+    Ok(result)
+}
+
 /// An intermediate item used while assembling structured numeric output.
 enum NumberAtom {
     Character(char),
@@ -721,6 +858,44 @@ pub(super) fn format_decimal(
     result
 }
 
+/// Renders one numeric field by binding its calculated digits to a format pattern.
+///
+/// The field pattern contains digit placeholders interleaved with literals and layout
+/// directives. Digits are right-aligned to the placeholders. Leading overflow is attached
+/// to the first occupied placeholder so inline parts remain anchored to trailing digits.
+fn render_digit_field(
+    output: &mut Vec<FormatOutput>,
+    field_pattern: &[FormatPart],
+    field_digits: &str,
+) {
+    let field_width = count_digits(field_pattern);
+    let leading_empty_slots = field_width.saturating_sub(field_digits.len());
+    let overflow_digits = field_digits.len().saturating_sub(field_width);
+    let mut slot_index = 0;
+    let mut next_digit = 0;
+
+    for pattern_part in field_pattern {
+        if matches!(pattern_part, FormatPart::Digit(_)) {
+            if slot_index >= leading_empty_slots && next_digit < field_digits.len() {
+                let take = if slot_index == leading_empty_slots {
+                    overflow_digits + 1
+                } else {
+                    1
+                };
+                let end = (next_digit + take).min(field_digits.len());
+                push_output(
+                    output,
+                    FormatOutput::Text(field_digits[next_digit..end].to_string()),
+                );
+                next_digit = end;
+            }
+            slot_index += 1;
+        } else if let Some(part) = output_for_part(pattern_part) {
+            push_output(output, part);
+        }
+    }
+}
+
 /// Build the final result with prefix and suffix parts.
 fn build_result(
     analysis: &FormatAnalysis,
@@ -738,309 +913,11 @@ fn build_result(
     result
 }
 
-/// Format a number in scientific notation according to a format section.
-fn format_scientific(
-    value: f64,
-    section: &Section,
-    upper: bool,
-    show_plus: bool,
-    _opts: &FormatOptions,
-) -> Result<Vec<FormatOutput>, FormatError> {
-    // Count digits before and after decimal in mantissa, and exponent digits
-    let mut mantissa_integer_places = 0;
-    let mut mantissa_decimal_places = 0;
-    let mut exponent_digits = 0;
-    let mut seen_decimal = false;
-    let mut after_exponent = false;
-
-    for part in &section.parts {
-        match part {
-            FormatPart::Digit(_) if !seen_decimal && !after_exponent => {
-                mantissa_integer_places += 1;
-            }
-            FormatPart::DecimalPoint if !after_exponent => {
-                seen_decimal = true;
-            }
-            FormatPart::Digit(_) if seen_decimal && !after_exponent => {
-                mantissa_decimal_places += 1;
-            }
-            FormatPart::Scientific { .. } => {
-                after_exponent = true;
-            }
-            FormatPart::Digit(_) if after_exponent => {
-                exponent_digits += 1;
-            }
-            _ => {}
-        }
-    }
-
-    // Convert value to scientific notation
-    let abs_value = value.abs();
-
-    // Handle zero specially
-    if abs_value == 0.0 {
-        let zeros = "0".repeat(mantissa_decimal_places);
-        let decimal_part = if mantissa_decimal_places > 0 {
-            format!(".{}", zeros)
-        } else {
-            String::new()
-        };
-        let exp_char = if upper { 'E' } else { 'e' };
-        let sign = if show_plus { "+" } else { "" };
-        let mantissa = format!("0{}", decimal_part);
-        let exponent_prefix = format!("{}{sign}", exp_char);
-
-        return compose_scientific_output(section, mantissa, exponent_prefix, "00".to_string());
-    }
-
-    // Calculate exponent based on integer placeholder count
-    // Standard format (0) or minimal format (no placeholder): mantissa 1-10, exponent = log10(value)
-    // Format with multiple placeholders (##0): adjust exponent to use more mantissa digits
-    let base_exponent = abs_value.log10().floor() as i32;
-
-    let exponent = if mantissa_integer_places > 1 {
-        // For ##0 (3 places), we want mantissa to be in range [1, 1000)
-        // Adjust exponent to be a multiple of group_size to group digits
-        // For ##0: exponent should be multiple of 3, giving mantissa like 123.5E+6, not 1.235E+8
-        let group_size = mantissa_integer_places.max(1);
-        // Use floor division to handle negative exponents correctly
-        // For base_exponent = -1, group_size = 3: floor(-1/3) * 3 = -1 * 3 = -3
-        ((base_exponent as f64) / (group_size as f64)).floor() as i32 * group_size
-    } else {
-        base_exponent
-    };
-
-    let mantissa = abs_value / 10_f64.powi(exponent);
-
-    // Format mantissa with appropriate decimal places
-    let mantissa_str = if mantissa_decimal_places > 0 {
-        format!("{:.prec$}", mantissa, prec = mantissa_decimal_places)
-    } else {
-        format!("{:.0}", mantissa)
-    };
-
-    // Format exponent
-    let exp_char = if upper { 'E' } else { 'e' };
-    let exp_sign = if exponent >= 0 {
-        if show_plus {
-            "+"
-        } else {
-            ""
-        }
-    } else {
-        "-"
-    };
-    let exp_abs = exponent.abs();
-
-    // Format exponent with appropriate zero padding
-    let exp_str = if exponent_digits >= 2 {
-        // 0.00E+00 format uses 2-digit exponents
-        format!("{:02}", exp_abs)
-    } else {
-        // ##0.0E+0 format uses minimal digits
-        format!("{}", exp_abs)
-    };
-    // Apply sign for negative values.
-    let mantissa = if value < 0.0 {
-        format!("-{}", mantissa_str)
-    } else {
-        mantissa_str
-    };
-    let exponent_prefix = format!("{}{}", exp_char, exp_sign);
-
-    compose_scientific_output(section, mantissa, exponent_prefix, exp_str)
-}
-
-fn compose_scientific_output(
-    section: &Section,
-    mantissa: String,
-    exponent_prefix: String,
-    exponent_digits: String,
-) -> Result<Vec<FormatOutput>, FormatError> {
-    let scientific_index = section
-        .parts
-        .iter()
-        .position(|part| matches!(part, FormatPart::Scientific { .. }))
-        .ok_or(FormatError::TypeMismatch {
-            expected: "scientific format",
-            got: "scientific format without exponent marker",
-        })?;
-    let mantissa_parts = &section.parts[..scientific_index];
-    let exponent_parts = &section.parts[scientific_index + 1..];
-    let first_mantissa_digit = mantissa_parts
-        .iter()
-        .position(|part| matches!(part, FormatPart::Digit(_)))
-        .ok_or(FormatError::TypeMismatch {
-            expected: "scientific format",
-            got: "scientific format without mantissa digit placeholders",
-        })?;
-    let (first_exponent_digit, last_exponent_digit) =
-        digit_bounds(exponent_parts).ok_or(FormatError::TypeMismatch {
-            expected: "scientific format",
-            got: "scientific format without exponent digit placeholders",
-        })?;
-    let decimal_index = mantissa_parts
-        .iter()
-        .position(|part| matches!(part, FormatPart::DecimalPoint));
-    let integer_end = decimal_index.unwrap_or(mantissa_parts.len());
-    let integer_parts = &mantissa_parts[..integer_end];
-    let integer_bounds = digit_bounds(integer_parts);
-    let prefix_end = integer_bounds
-        .map(|(first, _)| first)
-        .unwrap_or_else(|| decimal_index.unwrap_or(first_mantissa_digit));
-    let (mantissa_integer, mantissa_decimal) = mantissa
-        .split_once('.')
-        .map_or((mantissa.as_str(), None), |(integer, decimal)| {
-            (integer, Some(decimal))
-        });
-    let (mantissa_sign, mantissa_integer) = mantissa_integer
-        .strip_prefix('-')
-        .map_or((None, mantissa_integer), |integer| (Some('-'), integer));
-
-    let mut result = Vec::new();
-    result.extend(
-        mantissa_parts[..prefix_end]
-            .iter()
-            .filter_map(output_for_part),
-    );
-
-    let mut mantissa_output = Vec::new();
-    if let Some(sign) = mantissa_sign {
-        push_output(&mut mantissa_output, FormatOutput::Text(sign.to_string()));
-    }
-    let mantissa_trailing_start;
-
-    if let Some(decimal_index) = decimal_index {
-        if let Some((first_integer_digit, last_integer_digit)) = integer_bounds {
-            for output in compose_scientific_digit_run(
-                &integer_parts[first_integer_digit..=last_integer_digit],
-                mantissa_integer,
-            ) {
-                push_output(&mut mantissa_output, output);
-            }
-            for output in integer_parts[last_integer_digit + 1..]
-                .iter()
-                .filter_map(output_for_part)
-            {
-                push_output(&mut mantissa_output, output);
-            }
-        } else {
-            push_output(
-                &mut mantissa_output,
-                FormatOutput::Text(mantissa_integer.to_string()),
-            );
-        }
-
-        if let Some(decimal) = mantissa_decimal {
-            push_output(&mut mantissa_output, FormatOutput::Text(".".to_string()));
-            let decimal_parts = &mantissa_parts[decimal_index + 1..];
-            if let Some((first_decimal_digit, last_decimal_digit)) = digit_bounds(decimal_parts) {
-                for output in decimal_parts[..first_decimal_digit]
-                    .iter()
-                    .filter_map(output_for_part)
-                {
-                    push_output(&mut mantissa_output, output);
-                }
-                for output in compose_scientific_digit_run(
-                    &decimal_parts[first_decimal_digit..=last_decimal_digit],
-                    decimal,
-                ) {
-                    push_output(&mut mantissa_output, output);
-                }
-                mantissa_trailing_start = decimal_index + 1 + last_decimal_digit + 1;
-            } else {
-                mantissa_trailing_start = decimal_index + 1;
-            }
-        } else {
-            mantissa_trailing_start = decimal_index;
-        }
-    } else {
-        let (first_integer_digit, last_integer_digit) =
-            integer_bounds.ok_or(FormatError::TypeMismatch {
-                expected: "scientific format",
-                got: "scientific format without mantissa digit placeholders",
-            })?;
-        for output in compose_scientific_digit_run(
-            &integer_parts[first_integer_digit..=last_integer_digit],
-            mantissa_integer,
-        ) {
-            push_output(&mut mantissa_output, output);
-        }
-        mantissa_trailing_start = last_integer_digit + 1;
-    }
-
-    result.extend(mantissa_output);
-    result.extend(
-        mantissa_parts[mantissa_trailing_start..]
-            .iter()
-            .filter_map(output_for_part),
-    );
-
-    let mut exponent_output = vec![FormatOutput::Text(exponent_prefix)];
-    for output in exponent_parts[..first_exponent_digit]
-        .iter()
-        .filter_map(output_for_part)
-    {
-        push_output(&mut exponent_output, output);
-    }
-    for output in compose_scientific_digit_run(
-        &exponent_parts[first_exponent_digit..=last_exponent_digit],
-        &exponent_digits,
-    ) {
-        push_output(&mut exponent_output, output);
-    }
-    result.extend(exponent_output);
-    result.extend(
-        exponent_parts[last_exponent_digit + 1..]
-            .iter()
-            .filter_map(output_for_part),
-    );
-
-    Ok(result)
-}
-
-fn compose_scientific_digit_run(parts: &[FormatPart], rendered_digits: &str) -> Vec<FormatOutput> {
-    let placeholder_count = parts
+fn count_digits(parts: &[FormatPart]) -> usize {
+    parts
         .iter()
         .filter(|part| matches!(part, FormatPart::Digit(_)))
-        .count();
-    let digits: Vec<char> = rendered_digits.chars().collect();
-    let missing = placeholder_count.saturating_sub(digits.len());
-    let extra = digits.len().saturating_sub(placeholder_count);
-    let mut placeholder_index = 0;
-    let mut digit_index = 0;
-    let mut result = Vec::new();
-
-    for part in parts {
-        if matches!(part, FormatPart::Digit(_)) {
-            if placeholder_index >= missing && digit_index < digits.len() {
-                let take = if placeholder_index == missing {
-                    extra + 1
-                } else {
-                    1
-                };
-                let end = (digit_index + take).min(digits.len());
-                let text: String = digits[digit_index..end].iter().collect();
-                push_output(&mut result, FormatOutput::Text(text));
-                digit_index = end;
-            }
-            placeholder_index += 1;
-        } else if let Some(output) = output_for_part(part) {
-            push_output(&mut result, output);
-        }
-    }
-
-    result
-}
-
-fn digit_bounds(parts: &[FormatPart]) -> Option<(usize, usize)> {
-    let first = parts
-        .iter()
-        .position(|part| matches!(part, FormatPart::Digit(_)))?;
-    let last = parts
-        .iter()
-        .rposition(|part| matches!(part, FormatPart::Digit(_)))?;
-    Some((first, last))
+        .count()
 }
 
 #[cfg(test)]

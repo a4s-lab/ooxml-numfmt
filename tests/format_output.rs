@@ -74,8 +74,7 @@ fn preserves_fill_inside_scientific_mantissa() {
         vec![
             FormatOutput::Text("1".to_string()),
             FormatOutput::Fill('_'),
-            FormatOutput::Text("2.34".to_string()),
-            FormatOutput::Text("E+00".to_string()),
+            FormatOutput::Text("2.34E+00".to_string()),
         ]
     );
     assert_eq!(plain_text(&parts), "12.34E+00");
@@ -91,8 +90,7 @@ fn preserves_skip_inside_scientific_mantissa() {
         vec![
             FormatOutput::Text("1".to_string()),
             FormatOutput::Skip('-'),
-            FormatOutput::Text("2.34".to_string()),
-            FormatOutput::Text("E+00".to_string()),
+            FormatOutput::Text("2.34E+00".to_string()),
         ]
     );
     assert_eq!(plain_text(&parts), "1 2.34E+00");
@@ -106,8 +104,7 @@ fn preserves_fill_inside_scientific_exponent() {
     assert_eq!(
         parts,
         vec![
-            FormatOutput::Text("1.23".to_string()),
-            FormatOutput::Text("E+0".to_string()),
+            FormatOutput::Text("1.23E+0".to_string()),
             FormatOutput::Fill('_'),
             FormatOutput::Text("1".to_string()),
         ]
@@ -123,8 +120,7 @@ fn preserves_skip_inside_scientific_exponent() {
     assert_eq!(
         parts,
         vec![
-            FormatOutput::Text("1.23".to_string()),
-            FormatOutput::Text("E+0".to_string()),
+            FormatOutput::Text("1.23E+0".to_string()),
             FormatOutput::Skip('-'),
             FormatOutput::Text("1".to_string()),
         ]
@@ -142,8 +138,7 @@ fn preserves_fill_inside_scientific_decimal_run() {
         vec![
             FormatOutput::Text("1.2".to_string()),
             FormatOutput::Fill('_'),
-            FormatOutput::Text("3".to_string()),
-            FormatOutput::Text("E+01".to_string()),
+            FormatOutput::Text("3E+01".to_string()),
         ]
     );
 }
@@ -158,8 +153,7 @@ fn keeps_negative_scientific_sign_before_inline_fill() {
         vec![
             FormatOutput::Text("-".to_string()),
             FormatOutput::Fill('_'),
-            FormatOutput::Text("12.3".to_string()),
-            FormatOutput::Text("E+00".to_string()),
+            FormatOutput::Text("12.3E+00".to_string()),
         ]
     );
 }
@@ -169,13 +163,7 @@ fn keeps_negative_scientific_mantissa_coalesced() {
     let format = NumberFormat::parse("0.00E+00").unwrap();
     let parts = format.format(-12.34, &FormatOptions::default());
 
-    assert_eq!(
-        parts,
-        vec![
-            FormatOutput::Text("-1.23".to_string()),
-            FormatOutput::Text("E+01".to_string()),
-        ]
-    );
+    assert_eq!(parts, vec![FormatOutput::Text("-1.23E+01".to_string())]);
 }
 
 #[test]
@@ -186,8 +174,7 @@ fn preserves_fill_inside_zero_exponent() {
     assert_eq!(
         parts,
         vec![
-            FormatOutput::Text("0.00".to_string()),
-            FormatOutput::Text("E+0".to_string()),
+            FormatOutput::Text("0.00E+0".to_string()),
             FormatOutput::Fill('_'),
             FormatOutput::Text("0".to_string()),
         ]
@@ -199,13 +186,7 @@ fn preserves_literal_inside_scientific_mantissa() {
     let format = NumberFormat::parse("0\"x\"0.00E+00").unwrap();
     let parts = format.format(12.34, &FormatOptions::default());
 
-    assert_eq!(
-        parts,
-        vec![
-            FormatOutput::Text("1x2.34".to_string()),
-            FormatOutput::Text("E+00".to_string()),
-        ]
-    );
+    assert_eq!(parts, vec![FormatOutput::Text("1x2.34E+00".to_string())]);
 }
 
 #[test]
