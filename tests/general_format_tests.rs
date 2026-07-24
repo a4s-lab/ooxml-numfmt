@@ -63,8 +63,14 @@ fn test_general_format_case_insensitive() {
 #[test]
 fn test_general_format_special_values() {
     assert_eq!(format_default(f64::NAN, "General").unwrap(), "NaN");
-    assert_eq!(format_default(f64::INFINITY, "General").unwrap(), "Infinity");
-    assert_eq!(format_default(f64::NEG_INFINITY, "General").unwrap(), "-Infinity");
+    assert_eq!(
+        format_default(f64::INFINITY, "General").unwrap(),
+        "Infinity"
+    );
+    assert_eq!(
+        format_default(f64::NEG_INFINITY, "General").unwrap(),
+        "-Infinity"
+    );
 }
 
 #[test]
@@ -85,20 +91,44 @@ fn test_general_format_large_integers_no_scientific() {
     // These tests verify that large integers are displayed as-is
 
     // The value from the bug report
-    assert_eq!(format_default(484079807176.0, "General").unwrap(), "484079807176");
+    assert_eq!(
+        format_default(484079807176.0, "General").unwrap(),
+        "484079807176"
+    );
 
     // Values around the old 1e11 threshold
-    assert_eq!(format_default(100000000000.0, "General").unwrap(), "100000000000");
-    assert_eq!(format_default(99999999999.0, "General").unwrap(), "99999999999");
-    assert_eq!(format_default(100000000001.0, "General").unwrap(), "100000000001");
+    assert_eq!(
+        format_default(100000000000.0, "General").unwrap(),
+        "100000000000"
+    );
+    assert_eq!(
+        format_default(99999999999.0, "General").unwrap(),
+        "99999999999"
+    );
+    assert_eq!(
+        format_default(100000000001.0, "General").unwrap(),
+        "100000000001"
+    );
 
     // Larger exact integers (within safe f64 range)
-    assert_eq!(format_default(1000000000000.0, "General").unwrap(), "1000000000000");
-    assert_eq!(format_default(9007199254740991.0, "General").unwrap(), "9007199254740991"); // 2^53 - 1
+    assert_eq!(
+        format_default(1000000000000.0, "General").unwrap(),
+        "1000000000000"
+    );
+    assert_eq!(
+        format_default(9007199254740991.0, "General").unwrap(),
+        "9007199254740991"
+    ); // 2^53 - 1
 
     // Negative large integers
-    assert_eq!(format_default(-484079807176.0, "General").unwrap(), "-484079807176");
-    assert_eq!(format_default(-100000000000.0, "General").unwrap(), "-100000000000");
+    assert_eq!(
+        format_default(-484079807176.0, "General").unwrap(),
+        "-484079807176"
+    );
+    assert_eq!(
+        format_default(-100000000000.0, "General").unwrap(),
+        "-100000000000"
+    );
 }
 
 #[test]
@@ -114,9 +144,18 @@ fn test_text_format_large_integers_no_scientific() {
     assert_eq!(format_default(100000000001.0, "@").unwrap(), "100000000001");
 
     // Larger exact integers
-    assert_eq!(format_default(1000000000000.0, "@").unwrap(), "1000000000000");
+    assert_eq!(
+        format_default(1000000000000.0, "@").unwrap(),
+        "1000000000000"
+    );
 
     // Negative large integers
-    assert_eq!(format_default(-484079807176.0, "@").unwrap(), "-484079807176");
-    assert_eq!(format_default(-100000000000.0, "@").unwrap(), "-100000000000");
+    assert_eq!(
+        format_default(-484079807176.0, "@").unwrap(),
+        "-484079807176"
+    );
+    assert_eq!(
+        format_default(-100000000000.0, "@").unwrap(),
+        "-100000000000"
+    );
 }

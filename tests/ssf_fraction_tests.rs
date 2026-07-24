@@ -3,8 +3,8 @@
 //! These tests verify that ooxml-numfmt correctly implements Excel's fraction
 //! formats like "# ?/?", "# ??/??", etc.
 
-use serde_json::Value;
 use ooxml_numfmt::format_default;
+use serde_json::Value;
 
 #[derive(Debug)]
 struct FractionTestCase {
@@ -15,8 +15,8 @@ struct FractionTestCase {
 
 fn load_test_cases() -> Vec<FractionTestCase> {
     let json_data = include_str!("fixtures/ssf_fraction.json");
-    let tests: Vec<Value> = serde_json::from_str(json_data)
-        .expect("Failed to parse ssf_fraction.json");
+    let tests: Vec<Value> =
+        serde_json::from_str(json_data).expect("Failed to parse ssf_fraction.json");
 
     tests
         .iter()
@@ -84,10 +84,21 @@ fn test_ssf_fractions() {
 
     println!("\n=== SSF Fraction Test Results ===");
     println!("Total:   {}", total);
-    println!("Passed:  {} ({:.1}%)", passed, 100.0 * passed as f64 / total as f64);
-    println!("Failed:  {} ({:.1}%)", failed, 100.0 * failed as f64 / total as f64);
+    println!(
+        "Passed:  {} ({:.1}%)",
+        passed,
+        100.0 * passed as f64 / total as f64
+    );
+    println!(
+        "Failed:  {} ({:.1}%)",
+        failed,
+        100.0 * failed as f64 / total as f64
+    );
 
     if failed > 0 {
-        println!("\nNote: {} tests failed. Fraction formatting not yet implemented.", failed);
+        println!(
+            "\nNote: {} tests failed. Fraction formatting not yet implemented.",
+            failed
+        );
     }
 }

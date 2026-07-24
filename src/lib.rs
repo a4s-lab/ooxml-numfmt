@@ -11,7 +11,7 @@
 //! use ooxml_numfmt::{format_default, NumberFormat, FormatOptions};
 //!
 //! // One-off formatting
-//! let result = format_default(1234.56, "#,##0.00").unwrap();
+//! let result = fomat_default(1234.56, "#,##0.00").unwrap();
 //! assert_eq!(result, "1,234.56");
 //!
 //! // Compile once, format many
@@ -114,8 +114,8 @@ pub fn format_with_id(
     format_id: u32,
     opts: &FormatOptions,
 ) -> Result<String, ParseError> {
-    let format_code = format_code_from_id(format_id)
-        .ok_or(ParseError::InvalidFormatId(format_id))?;
+    let format_code =
+        format_code_from_id(format_id).ok_or(ParseError::InvalidFormatId(format_id))?;
     format(value, format_code, opts)
 }
 
