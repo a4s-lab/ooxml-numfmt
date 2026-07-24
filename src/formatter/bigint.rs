@@ -7,7 +7,7 @@
 use crate::ast::Section;
 use crate::error::FormatError;
 use crate::options::FormatOptions;
-use crate::output::{output_for_part, FormatOutput};
+use crate::output::{output_for_part, push_output, FormatOutput};
 use num_bigint::BigInt;
 
 /// The maximum safe integer value for f64 (2^53 - 1)
@@ -73,109 +73,60 @@ fn format_large_bigint(
     let value_str = scaled_value.to_string();
 
     // Format the integer part
-    let formatted_integer = format_bigint_integer(
+    let mut formatted = format_bigint_integer(
         &value_str,
         &analysis.integer_placeholders,
         analysis.has_thousands_separator,
-        &analysis.inline_literals,
+        &analysis.integer_inline_parts,
         opts,
     );
 
     // Handle decimal places (for BigInt, decimal part is always 0)
-    let decimal_places = analysis.decimal_places();
-    let formatted = if decimal_places > 0 {
-        let zeros = "0".repeat(decimal_places);
-        format!(
-            "{}{}{}",
-            formatted_integer, opts.locale.decimal_separator, zeros
-        )
-    } else {
-        formatted_integer
-    };
+    if analysis.decimal_places() > 0 {
+        push_output(
+            &mut formatted,
+            FormatOutput::Text(opts.locale.decimal_separator.to_string()),
+        );
+        for output in super::number::format_decimal(
+            0.0,
+            &analysis.decimal_placeholders,
+            &analysis.decimal_inline_parts,
+            opts,
+        ) {
+            push_output(&mut formatted, output);
+        }
+    }
 
-    let capacity = analysis.prefix_parts.len() + analysis.suffix_parts.len() + 1;
+    let capacity = analysis.prefix_parts.len() + formatted.len() + analysis.suffix_parts.len();
     let mut result = Vec::with_capacity(capacity);
 
     result.extend(analysis.prefix_parts.iter().filter_map(output_for_part));
-    result.push(FormatOutput::Text(formatted));
+    result.extend(formatted);
     result.extend(analysis.suffix_parts.iter().filter_map(output_for_part));
 
     Ok(result)
 }
 
-/// Format the integer part of a BigInt as a string.
+/// Format the integer part of a BigInt.
 fn format_bigint_integer(
     value_str: &str,
     placeholders: &[crate::ast::DigitPlaceholder],
     use_thousands: bool,
-    inline_literals: &[(usize, String)],
+    inline_parts: &[(usize, crate::ast::FormatPart)],
     opts: &FormatOptions,
-) -> String {
+) -> Vec<FormatOutput> {
     let value_digits: Vec<char> = value_str.chars().collect();
-
     let min_digits = placeholders.iter().filter(|p| p.is_required()).count();
     let output_len = value_digits.len().max(min_digits);
 
-    // Build right-to-left into Vec, then reverse once
-    let separator_count = if use_thousands { output_len / 3 } else { 0 };
-    let literal_chars: usize = inline_literals.iter().map(|(_, s)| s.len()).sum();
-    let estimated_capacity = output_len + separator_count + literal_chars;
-    let mut chars = Vec::with_capacity(estimated_capacity);
-
-    // Process from right to left (least significant first)
-    for (digit_count, pos_from_right) in (0..output_len).enumerate() {
-        let digit_index = value_digits.len() as isize - 1 - pos_from_right as isize;
-
-        // Add thousands separator if needed (but not at position 0)
-        if use_thousands && digit_count > 0 && digit_count % 3 == 0 {
-            chars.push(opts.locale.thousands_separator);
-        }
-
-        // Check if there's an inline literal at this position
-        let literals_at_pos: Vec<&str> = inline_literals
-            .iter()
-            .filter(|(pos, _)| *pos == pos_from_right)
-            .map(|(_, s)| s.as_str())
-            .collect();
-
-        for literal_str in literals_at_pos.iter().rev() {
-            for ch in literal_str.chars().rev() {
-                chars.push(ch);
-            }
-        }
-
-        if digit_index >= 0 {
-            // We have a digit from the value
-            chars.push(value_digits[digit_index as usize]);
-        } else {
-            // Use placeholder's empty character for padding
-            let placeholder_index = placeholders.len() as isize - 1 - pos_from_right as isize;
-            if placeholder_index >= 0 {
-                let placeholder = placeholders[placeholder_index as usize];
-                if let Some(c) = placeholder.empty_char() {
-                    chars.push(c);
-                }
-            }
-        }
-    }
-
-    // Handle the case where we have no digits but need at least one
-    if chars.is_empty() && placeholders.iter().any(|p| p.is_required()) {
-        chars.push('0');
-    }
-
-    // Push any inline literals that are at positions beyond what we formatted
-    for (literal_pos, literal_str) in inline_literals {
-        if *literal_pos >= output_len {
-            for ch in literal_str.chars().rev() {
-                chars.push(ch);
-            }
-        }
-    }
-
-    // Reverse and collect into String
-    chars.reverse();
-    chars.into_iter().collect()
+    super::number::format_integer_digits(
+        &value_digits,
+        placeholders,
+        use_thousands,
+        inline_parts,
+        output_len,
+        opts,
+    )
 }
 
 /// Fallback formatting for BigInt values.

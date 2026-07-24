@@ -65,6 +65,111 @@ fn preserves_fill_between_scientific_mantissa_and_exponent() {
 }
 
 #[test]
+fn preserves_fill_between_integer_placeholders() {
+    let format = NumberFormat::parse("0*_0").unwrap();
+    let parts = format.format(12.0, &FormatOptions::default());
+
+    assert_eq!(
+        parts,
+        vec![
+            FormatOutput::Text("1".to_string()),
+            FormatOutput::Fill('_'),
+            FormatOutput::Text("2".to_string()),
+        ]
+    );
+    assert_eq!(plain_text(&parts), "12");
+}
+
+#[test]
+fn keeps_inline_fill_at_placeholder_boundary_with_extra_digits() {
+    let format = NumberFormat::parse("0*_0").unwrap();
+    let parts = format.format(1234.0, &FormatOptions::default());
+
+    assert_eq!(
+        parts,
+        vec![
+            FormatOutput::Text("123".to_string()),
+            FormatOutput::Fill('_'),
+            FormatOutput::Text("4".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn preserves_fill_order_around_group_separator() {
+    let options = FormatOptions::default();
+
+    let after_comma = NumberFormat::parse("0,*_000").unwrap();
+    assert_eq!(
+        after_comma.format(1234.0, &options),
+        vec![
+            FormatOutput::Text("1,".to_string()),
+            FormatOutput::Fill('_'),
+            FormatOutput::Text("234".to_string()),
+        ]
+    );
+
+    let before_comma = NumberFormat::parse("0*_,000").unwrap();
+    assert_eq!(
+        before_comma.format(1234.0, &options),
+        vec![
+            FormatOutput::Text("1".to_string()),
+            FormatOutput::Fill('_'),
+            FormatOutput::Text(",234".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn preserves_skip_between_integer_placeholders() {
+    let format = NumberFormat::parse("0_-0").unwrap();
+    let parts = format.format(12.0, &FormatOptions::default());
+
+    assert_eq!(
+        parts,
+        vec![
+            FormatOutput::Text("1".to_string()),
+            FormatOutput::Skip('-'),
+            FormatOutput::Text("2".to_string()),
+        ]
+    );
+    assert_eq!(plain_text(&parts), "1 2");
+}
+
+#[cfg(feature = "bigint")]
+#[test]
+fn preserves_fill_between_bigint_placeholders() {
+    let format = NumberFormat::parse("0*_0").unwrap();
+    let value = "12345678901234567".parse().unwrap();
+    let parts = format.format_bigint(&value, &FormatOptions::default());
+
+    assert_eq!(
+        parts,
+        vec![
+            FormatOutput::Text("1234567890123456".to_string()),
+            FormatOutput::Fill('_'),
+            FormatOutput::Text("7".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn preserves_fill_between_decimal_placeholders() {
+    let format = NumberFormat::parse("0.0*_0").unwrap();
+    let parts = format.format(1.23, &FormatOptions::default());
+
+    assert_eq!(
+        parts,
+        vec![
+            FormatOutput::Text("1.2".to_string()),
+            FormatOutput::Fill('_'),
+            FormatOutput::Text("3".to_string()),
+        ]
+    );
+    assert_eq!(plain_text(&parts), "1.23");
+}
+
+#[test]
 fn preserves_fill_in_text_section() {
     let format = NumberFormat::parse("0;0;0;@*.").unwrap();
     let parts = format.format_text("abc", &FormatOptions::default());

@@ -3,7 +3,7 @@
 use crate::ast::{DigitPlaceholder, FormatPart, Section};
 use crate::error::FormatError;
 use crate::options::FormatOptions;
-use crate::output::{output_for_part, text_if_nonempty, FormatOutput};
+use crate::output::{output_for_part, push_output, text_if_nonempty, FormatOutput};
 
 /// Format a simple integer value with digit placeholders (no separators or literals).
 /// Based on SSF's write_num helper in bits/59_numhelp.js.
@@ -61,12 +61,12 @@ pub struct FormatAnalysis {
     pub percent_count: usize,
     /// Thousands scaling factor (trailing commas divide by 1000 each)
     pub thousands_scale: usize,
-    /// Literals that appear inline with integer digits (position -> literal)
-    /// Position is counted from the right (0 = ones place, 1 = tens, etc.)
-    pub inline_literals: Vec<(usize, String)>,
-    /// Literals that appear inline with decimal digits (position -> literal)
-    /// Position is counted from the left (0 = first decimal place, 1 = second, etc.)
-    pub decimal_inline_literals: Vec<(usize, String)>,
+    /// Parts that appear inline with integer digits.
+    /// Position is counted from the right (0 = after the ones place, 1 = before it, etc.).
+    pub integer_inline_parts: Vec<(usize, FormatPart)>,
+    /// Parts that appear inline with decimal digits.
+    /// Position is counted from the left (0 = before the first decimal place).
+    pub decimal_inline_parts: Vec<(usize, FormatPart)>,
     /// Parts before the number (literals, etc.)
     pub prefix_parts: Vec<FormatPart>,
     /// Parts after the number (literals, percent, etc.)
@@ -95,10 +95,14 @@ pub fn analyze_format(section: &Section) -> FormatAnalysis {
     let mut decimal_placeholders = Vec::new();
     let mut has_thousands_separator = false;
     let mut percent_count = 0;
-    let mut inline_literals = Vec::new();
-    let mut decimal_inline_literals = Vec::new();
+    let mut integer_inline_parts = Vec::new();
+    let mut decimal_inline_parts = Vec::new();
     let mut prefix_parts = Vec::new();
     let mut suffix_parts = Vec::new();
+    let last_digit_index = section
+        .parts
+        .iter()
+        .rposition(|part| matches!(part, FormatPart::Digit(_)));
 
     // First, count trailing commas by scanning backwards from the end
     // Any ThousandsSeparator after the last Digit/DecimalPoint is a trailing comma
@@ -131,7 +135,7 @@ pub fn analyze_format(section: &Section) -> FormatAnalysis {
     let mut after_decimal = false;
     let mut after_digits = false;
 
-    for part in &section.parts {
+    for (part_index, part) in section.parts.iter().enumerate() {
         match part {
             FormatPart::Digit(placeholder) => {
                 seen_digit = true;
@@ -149,10 +153,14 @@ pub fn analyze_format(section: &Section) -> FormatAnalysis {
             }
             FormatPart::ThousandsSeparator => {
                 commas_seen += 1;
-                // Only count as thousands separator if it's not a trailing comma
-                // Trailing commas are only for scaling, not for formatting separators
+                // Only count as thousands separator if it's not a trailing comma.
+                // Keep its placeholder boundary so adjacent structured parts retain
+                // their source order relative to the rendered group separator.
                 if commas_seen <= non_trailing_comma_count {
                     has_thousands_separator = true;
+                    if seen_digit && !after_decimal {
+                        integer_inline_parts.push((integer_placeholders.len(), part.clone()));
+                    }
                 }
             }
             FormatPart::Percent => {
@@ -169,16 +177,6 @@ pub fn analyze_format(section: &Section) -> FormatAnalysis {
             | FormatPart::Locale(crate::ast::LocaleCode {
                 currency: Some(_), ..
             }) => {
-                let literal_str = if let FormatPart::Literal(s) = part {
-                    s.clone()
-                } else if let FormatPart::EscapedLiteral(s) = part {
-                    s.clone()
-                } else if let FormatPart::Locale(loc) = part {
-                    loc.currency.clone().unwrap_or_default()
-                } else {
-                    String::new()
-                };
-
                 if !seen_digit {
                     // Before any digits - prefix
                     prefix_parts.push(part.clone());
@@ -186,13 +184,11 @@ pub fn analyze_format(section: &Section) -> FormatAnalysis {
                     // After all digits (after decimal or after digit sequence ended) - suffix
                     suffix_parts.push(part.clone());
                 } else if after_decimal {
-                    // Among decimal digits - inline literal in decimal part
-                    // Store position from left (index in decimal_placeholders)
-                    decimal_inline_literals.push((decimal_placeholders.len(), literal_str));
+                    // Among decimal digits - store the boundary from the left.
+                    decimal_inline_parts.push((decimal_placeholders.len(), part.clone()));
                 } else {
-                    // Among integer digits - inline literal
-                    // Store the current placeholder count - we'll convert to position later
-                    inline_literals.push((integer_placeholders.len(), literal_str));
+                    // Among integer digits - convert this placeholder count below.
+                    integer_inline_parts.push((integer_placeholders.len(), part.clone()));
                 }
             }
             FormatPart::Locale(loc) if loc.currency.is_none() => {
@@ -206,6 +202,12 @@ pub fn analyze_format(section: &Section) -> FormatAnalysis {
             FormatPart::Fill(_) | FormatPart::Skip(_) => {
                 if !seen_digit {
                     prefix_parts.push(part.clone());
+                } else if last_digit_index.is_some_and(|last_digit| part_index < last_digit) {
+                    if after_decimal {
+                        decimal_inline_parts.push((decimal_placeholders.len(), part.clone()));
+                    } else {
+                        integer_inline_parts.push((integer_placeholders.len(), part.clone()));
+                    }
                 } else {
                     suffix_parts.push(part.clone());
                 }
@@ -229,20 +231,15 @@ pub fn analyze_format(section: &Section) -> FormatAnalysis {
     // Use the trailing comma count we calculated earlier
     let thousands_scale = trailing_comma_count;
 
-    // Convert inline_literals from placeholder indices to positions from right
-    // Inline literals are stored as (placeholder_count, string) where placeholder_count
-    // is the number of placeholders added BEFORE seeing the literal.
-    // This means the literal appears before placeholder at index=placeholder_count.
-    // When formatting right-to-left, placeholder at index I is at position (total-1-I) from right.
+    // Convert integer inline parts from placeholder counts to positions from the right.
+    // A part seen after N placeholders appears before placeholder N, which is
+    // `total_placeholders - N` positions from the right.
     let total_placeholders = integer_placeholders.len();
-    let inline_literals_converted: Vec<(usize, String)> = inline_literals
+    let integer_inline_parts = integer_inline_parts
         .into_iter()
-        .map(|(placeholder_count, literal)| {
-            // Literal appears before placeholder[placeholder_count]
-            // That placeholder is at position (total - 1 - placeholder_count) from right
-            // Insert the literal AT that position (before that placeholder's digit)
+        .map(|(placeholder_count, part)| {
             let pos_from_right = total_placeholders - placeholder_count;
-            (pos_from_right, literal)
+            (pos_from_right, part)
         })
         .collect();
 
@@ -252,8 +249,8 @@ pub fn analyze_format(section: &Section) -> FormatAnalysis {
         has_thousands_separator,
         percent_count,
         thousands_scale,
-        inline_literals: inline_literals_converted,
-        decimal_inline_literals,
+        integer_inline_parts,
+        decimal_inline_parts,
         prefix_parts,
         suffix_parts,
     }
@@ -365,7 +362,7 @@ pub fn format_number(
     let formatted = format_with_placeholders(rounded, &analysis, opts);
 
     // Build the final result with prefix and suffix
-    let result = build_result(&analysis, &formatted, opts);
+    let result = build_result(&analysis, formatted, opts);
 
     Ok(result)
 }
@@ -396,45 +393,38 @@ fn format_number_as_integer(
     // For integers, decimal places should be zero unless explicitly formatted
     let decimal_places = analysis.decimal_places();
 
+    let mut formatted = format_integer(
+        adjusted_value as u64,
+        &analysis.integer_placeholders,
+        analysis.has_thousands_separator,
+        &analysis.integer_inline_parts,
+        opts,
+    );
+
     if decimal_places > 0 {
-        // Integer displayed with decimal places (e.g., "0.00" formatting integer 42 -> "42.00")
-        // Convert to string and pad with zeros
-        let integer_str = format_integer(
-            adjusted_value as u64,
-            &analysis.integer_placeholders,
-            analysis.has_thousands_separator,
-            &analysis.inline_literals,
+        push_output(
+            &mut formatted,
+            FormatOutput::Text(opts.locale.decimal_separator.to_string()),
+        );
+        for output in format_decimal(
+            0.0,
+            &analysis.decimal_placeholders,
+            &analysis.decimal_inline_parts,
             opts,
-        );
-
-        // Add decimal point and zeros
-        let decimal_str = "0".repeat(decimal_places);
-        let formatted = format!(
-            "{}{}{}",
-            integer_str, opts.locale.decimal_separator, decimal_str
-        );
-
-        // Build the final result with prefix and suffix
-        let result = build_result(&analysis, &formatted, opts);
-        Ok(result)
-    } else {
-        // Pure integer formatting (no decimal places)
-        let formatted = format_integer(
-            adjusted_value as u64,
-            &analysis.integer_placeholders,
-            analysis.has_thousands_separator,
-            &analysis.inline_literals,
-            opts,
-        );
-
-        // Build the final result with prefix and suffix
-        let result = build_result(&analysis, &formatted, opts);
-        Ok(result)
+        ) {
+            push_output(&mut formatted, output);
+        }
     }
+
+    Ok(build_result(&analysis, formatted, opts))
 }
 
 /// Format a number according to the analysis.
-fn format_with_placeholders(value: f64, analysis: &FormatAnalysis, opts: &FormatOptions) -> String {
+fn format_with_placeholders(
+    value: f64,
+    analysis: &FormatAnalysis,
+    opts: &FormatOptions,
+) -> Vec<FormatOutput> {
     let decimal_places = analysis.decimal_places();
 
     // Split into integer and decimal parts
@@ -442,29 +432,31 @@ fn format_with_placeholders(value: f64, analysis: &FormatAnalysis, opts: &Format
     let decimal_part = value.fract();
 
     // Format integer part
-    let integer_str = format_integer(
+    let mut result = format_integer(
         integer_part,
         &analysis.integer_placeholders,
         analysis.has_thousands_separator,
-        &analysis.inline_literals,
+        &analysis.integer_inline_parts,
         opts,
     );
 
     // Format decimal part
     if decimal_places > 0 {
-        let decimal_str = format_decimal(
+        push_output(
+            &mut result,
+            FormatOutput::Text(opts.locale.decimal_separator.to_string()),
+        );
+        for output in format_decimal(
             decimal_part,
             &analysis.decimal_placeholders,
-            &analysis.decimal_inline_literals,
+            &analysis.decimal_inline_parts,
             opts,
-        );
-        format!(
-            "{}{}{}",
-            integer_str, opts.locale.decimal_separator, decimal_str
-        )
-    } else {
-        integer_str
+        ) {
+            push_output(&mut result, output);
+        }
     }
+
+    result
 }
 
 /// Format the integer part with placeholders and thousands separator.
@@ -472,26 +464,28 @@ fn format_integer(
     value: u64,
     placeholders: &[DigitPlaceholder],
     use_thousands: bool,
-    inline_literals: &[(usize, String)],
+    inline_parts: &[(usize, FormatPart)],
     opts: &FormatOptions,
-) -> String {
+) -> Vec<FormatOutput> {
     let value_str = value.to_string();
     let value_digits: Vec<char> = value_str.chars().collect();
 
     let min_digits = placeholders.iter().filter(|p| p.is_required()).count();
 
-    // Special case: if value is 0 and all placeholders are optional, return empty
-    // BUT still include any inline literals
+    // Special case: if value is 0 and all placeholders are optional, emit only
+    // parts from the optional placeholder region.
     if value == 0 && min_digits == 0 {
-        let mut result = String::new();
-        // Add any inline literals that would be in the optional placeholder region
-        // Sort by position (descending) to add them left-to-right
-        let mut sorted_literals: Vec<_> = inline_literals.iter().collect();
-        sorted_literals.sort_by_key(|a| std::cmp::Reverse(a.0)); // Descending order
+        let mut positioned_parts: Vec<_> = inline_parts.iter().collect();
+        positioned_parts.sort_by_key(|(position, _)| std::cmp::Reverse(*position));
 
-        for (_literal_pos, literal_str) in sorted_literals {
-            // Add literals in order (left to right)
-            result.push_str(literal_str);
+        let mut result = Vec::new();
+        for (_, part) in positioned_parts {
+            if let Some(output) = output_for_part(part) {
+                push_output(&mut result, output);
+            }
+        }
+        if result.is_empty() {
+            result.push(FormatOutput::Text(String::new()));
         }
         return result;
     }
@@ -513,94 +507,136 @@ fn format_integer(
         value_digits.len().max(placeholders.len())
     };
 
-    // Build right-to-left into Vec, then reverse once (O(n) instead of O(n²) with insert(0))
-    // Estimate capacity: output_len + separators + inline literals
+    format_integer_digits(
+        &value_digits,
+        placeholders,
+        use_thousands,
+        inline_parts,
+        output_len,
+        opts,
+    )
+}
+
+/// An intermediate item used while assembling structured numeric output.
+enum NumberAtom {
+    Character(char),
+    Output(FormatOutput),
+}
+
+pub(super) fn format_integer_digits(
+    value_digits: &[char],
+    placeholders: &[DigitPlaceholder],
+    use_thousands: bool,
+    inline_parts: &[(usize, FormatPart)],
+    output_len: usize,
+    opts: &FormatOptions,
+) -> Vec<FormatOutput> {
+    // Build right-to-left into atoms, then reverse once.
     let separator_count = if use_thousands { output_len / 3 } else { 0 };
-    let literal_chars: usize = inline_literals.iter().map(|(_, s)| s.len()).sum();
-    let estimated_capacity = output_len + separator_count + literal_chars;
-    let mut chars = Vec::with_capacity(estimated_capacity);
+    let estimated_capacity = output_len + separator_count + inline_parts.len();
+    let mut atoms = Vec::with_capacity(estimated_capacity);
 
     // Process from right to left (least significant first)
     for (digit_count, pos_from_right) in (0..output_len).enumerate() {
         let digit_index = value_digits.len() as isize - 1 - pos_from_right as isize;
 
-        // Add thousands separator if needed (but not at position 0)
-        if use_thousands && digit_count > 0 && digit_count % 3 == 0 {
-            chars.push(opts.locale.thousands_separator);
+        let parts_at_position: Vec<_> = inline_parts
+            .iter()
+            .filter(|(position, _)| *position == pos_from_right)
+            .map(|(_, part)| part)
+            .collect();
+        let needs_group_separator = use_thousands && digit_count > 0 && digit_count % 3 == 0;
+        let has_explicit_group_separator = parts_at_position
+            .iter()
+            .any(|part| matches!(part, FormatPart::ThousandsSeparator));
+
+        // Group separators beyond the explicit placeholder pattern are generated
+        // automatically. Within the pattern, the stored comma marker preserves its
+        // order relative to literals and layout directives at the same boundary.
+        if needs_group_separator && !has_explicit_group_separator {
+            atoms.push(NumberAtom::Character(opts.locale.thousands_separator));
         }
 
-        // Check if there's an inline literal at this position
-        // Position is from the right (0 = ones place, 1 = tens, etc.)
-        // Collect all literals at this position and push them
-        let literals_at_pos: Vec<&str> = inline_literals
-            .iter()
-            .filter(|(pos, _)| *pos == pos_from_right)
-            .map(|(_, s)| s.as_str())
-            .collect();
-
-        // Push in reverse order (will be reversed back at the end)
-        for literal_str in literals_at_pos.iter().rev() {
-            for ch in literal_str.chars().rev() {
-                chars.push(ch);
+        // Parts at the same boundary are pushed in reverse source order because
+        // the entire atom stream is reversed after right-to-left construction.
+        for part in parts_at_position.into_iter().rev() {
+            if matches!(part, FormatPart::ThousandsSeparator) {
+                if needs_group_separator {
+                    atoms.push(NumberAtom::Character(opts.locale.thousands_separator));
+                }
+            } else if let Some(output) = output_for_part(part) {
+                atoms.push(NumberAtom::Output(output));
             }
         }
 
         if digit_index >= 0 {
-            // We have a digit from the value
-            chars.push(value_digits[digit_index as usize]);
+            atoms.push(NumberAtom::Character(value_digits[digit_index as usize]));
         } else {
-            // No digit from value - apply SSF "hashq" padding logic
-            // Use the placeholder at this position to determine padding character:
-            //   0 (Zero) -> '0'
-            //   # (Hash) -> nothing (skip)
-            //   ? (Question) -> ' '
             let placeholder_index = placeholders.len() as isize - 1 - pos_from_right as isize;
             if placeholder_index >= 0 {
                 let placeholder = placeholders[placeholder_index as usize];
-                // empty_char returns Some('0') for Zero, None for Hash, Some(' ') for Question
-                if let Some(c) = placeholder.empty_char() {
-                    chars.push(c);
+                if let Some(character) = placeholder.empty_char() {
+                    atoms.push(NumberAtom::Character(character));
                 }
-                // If None (Hash), we don't push anything - this truncates the output
             }
         }
     }
 
     // Handle the case where we have no digits but need at least one
-    if chars.is_empty() {
-        // Check if we have any required placeholders
-        if placeholders.iter().any(|p| p.is_required()) {
-            chars.push('0');
+    if !atoms
+        .iter()
+        .any(|atom| matches!(atom, NumberAtom::Character(_)))
+        && placeholders
+            .iter()
+            .any(|placeholder| placeholder.is_required())
+    {
+        atoms.push(NumberAtom::Character('0'));
+    }
+
+    // Parts beyond the formatted width belong to omitted optional placeholders.
+    // Add them in reverse visual order because the atom stream is reversed below.
+    let mut remaining_parts: Vec<_> = inline_parts
+        .iter()
+        .enumerate()
+        .filter(|(_, (position, _))| *position >= output_len)
+        .collect();
+    remaining_parts.sort_by(
+        |(left_index, (left_position, _)), (right_index, (right_position, _))| {
+            left_position
+                .cmp(right_position)
+                .then_with(|| right_index.cmp(left_index))
+        },
+    );
+    for (_, (_, part)) in remaining_parts {
+        if let Some(output) = output_for_part(part) {
+            atoms.push(NumberAtom::Output(output));
         }
     }
 
-    // Push any inline literals that are at positions beyond what we formatted
-    // (literals in the leftmost optional placeholder region)
-    for (literal_pos, literal_str) in inline_literals {
-        if *literal_pos >= output_len {
-            // This literal is to the left of all displayed digits
-            for ch in literal_str.chars().rev() {
-                chars.push(ch);
-            }
+    atoms.reverse();
+
+    let mut result = Vec::with_capacity(atoms.len());
+    for atom in atoms {
+        match atom {
+            NumberAtom::Character(character) => match result.last_mut() {
+                Some(FormatOutput::Text(text)) => text.push(character),
+                _ => result.push(FormatOutput::Text(character.to_string())),
+            },
+            NumberAtom::Output(output) => push_output(&mut result, output),
         }
     }
-
-    // Reverse once and collect into String
-    chars.reverse();
-    let result: String = chars.into_iter().collect();
-
     result
 }
 
 /// Format the decimal part with placeholders.
-fn format_decimal(
+pub(super) fn format_decimal(
     value: f64,
     placeholders: &[DigitPlaceholder],
-    decimal_inline_literals: &[(usize, String)],
+    inline_parts: &[(usize, FormatPart)],
     _opts: &FormatOptions,
-) -> String {
+) -> Vec<FormatOutput> {
     if placeholders.is_empty() {
-        return String::new();
+        return Vec::new();
     }
 
     // Match SSF behavior: clamp decimal places to 10 (bits/66_numint.js line 70)
@@ -614,7 +650,7 @@ fn format_decimal(
     let decimal_str = format!("{:0>width$}", decimal_int, width = effective_places);
     let decimal_chars: Vec<char> = decimal_str.chars().collect();
 
-    let mut result = String::new();
+    let mut result = Vec::new();
 
     // Check if the entire decimal part is zeros (matches SSF behavior)
     // SSF strips all trailing zeros with regex /([^0])0+$/ before applying format
@@ -642,15 +678,14 @@ fn format_decimal(
 
     // Build result, respecting placeholder rules
     for (i, placeholder) in placeholders.iter().enumerate() {
-        // Insert any decimal inline literals that appear at this position
-        for (literal_pos, literal_str) in decimal_inline_literals {
-            if *literal_pos == i {
-                result.push_str(literal_str);
+        for (_, part) in inline_parts.iter().filter(|(position, _)| *position == i) {
+            if let Some(output) = output_for_part(part) {
+                push_output(&mut result, output);
             }
         }
 
         // Get the character for this position
-        let ch = if i < effective_places {
+        let character = if i < effective_places {
             decimal_chars.get(i).copied().unwrap_or('0')
         } else {
             // Beyond effective precision: apply SSF "hashq" logic
@@ -658,30 +693,28 @@ fn format_decimal(
             // Zero (0) -> '0'
             // Question (?) -> ' '
             match placeholder {
-                DigitPlaceholder::Hash => {
-                    // Skip - don't add anything
-                    continue;
-                }
+                DigitPlaceholder::Hash => continue,
                 DigitPlaceholder::Zero => '0',
                 DigitPlaceholder::Question => ' ',
             }
         };
 
-        if i >= trailing_zeros_start && ch == '0' && !placeholder.is_required() {
-            // Skip trailing zeros for # placeholders (only within effective_places)
+        if i >= trailing_zeros_start && character == '0' && !placeholder.is_required() {
             if matches!(placeholder, DigitPlaceholder::Question) {
-                result.push(' ');
+                push_output(&mut result, FormatOutput::Text(" ".to_string()));
             }
-            // For Hash, we don't add anything
         } else {
-            result.push(ch);
+            push_output(&mut result, FormatOutput::Text(character.to_string()));
         }
     }
 
-    // Append any decimal inline literals that come after all placeholders
-    for (literal_pos, literal_str) in decimal_inline_literals {
-        if *literal_pos >= placeholders.len() {
-            result.push_str(literal_str);
+    // Append parts that come after all decimal placeholders.
+    for (_, part) in inline_parts
+        .iter()
+        .filter(|(position, _)| *position >= placeholders.len())
+    {
+        if let Some(output) = output_for_part(part) {
+            push_output(&mut result, output);
         }
     }
 
@@ -691,14 +724,15 @@ fn format_decimal(
 /// Build the final result with prefix and suffix parts.
 fn build_result(
     analysis: &FormatAnalysis,
-    formatted_number: &str,
+    formatted_number: Vec<FormatOutput>,
     _opts: &FormatOptions,
 ) -> Vec<FormatOutput> {
-    let capacity = analysis.prefix_parts.len() + analysis.suffix_parts.len() + 1;
+    let capacity =
+        analysis.prefix_parts.len() + formatted_number.len() + analysis.suffix_parts.len();
     let mut result = Vec::with_capacity(capacity);
 
     result.extend(analysis.prefix_parts.iter().filter_map(output_for_part));
-    result.push(FormatOutput::Text(formatted_number.to_string()));
+    result.extend(formatted_number);
     result.extend(analysis.suffix_parts.iter().filter_map(output_for_part));
 
     result

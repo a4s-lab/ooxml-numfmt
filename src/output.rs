@@ -49,6 +49,17 @@ pub(crate) fn text_if_nonempty(text: impl Into<String>) -> Vec<FormatOutput> {
     }
 }
 
+/// Appends output, coalescing adjacent text parts.
+pub(crate) fn push_output(result: &mut Vec<FormatOutput>, output: FormatOutput) {
+    match output {
+        FormatOutput::Text(text) => match result.last_mut() {
+            Some(FormatOutput::Text(existing)) => existing.push_str(&text),
+            _ => result.push(FormatOutput::Text(text)),
+        },
+        output => result.push(output),
+    }
+}
+
 /// Converts a context-independent format part to structured output.
 pub(crate) fn output_for_part(part: &FormatPart) -> Option<FormatOutput> {
     match part {
