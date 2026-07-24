@@ -65,6 +65,150 @@ fn preserves_fill_between_scientific_mantissa_and_exponent() {
 }
 
 #[test]
+fn preserves_fill_inside_scientific_mantissa() {
+    let format = NumberFormat::parse("0*_0.00E+00").unwrap();
+    let parts = format.format(12.34, &FormatOptions::default());
+
+    assert_eq!(
+        parts,
+        vec![
+            FormatOutput::Text("1".to_string()),
+            FormatOutput::Fill('_'),
+            FormatOutput::Text("2.34".to_string()),
+            FormatOutput::Text("E+00".to_string()),
+        ]
+    );
+    assert_eq!(plain_text(&parts), "12.34E+00");
+}
+
+#[test]
+fn preserves_skip_inside_scientific_mantissa() {
+    let format = NumberFormat::parse("0_-0.00E+00").unwrap();
+    let parts = format.format(12.34, &FormatOptions::default());
+
+    assert_eq!(
+        parts,
+        vec![
+            FormatOutput::Text("1".to_string()),
+            FormatOutput::Skip('-'),
+            FormatOutput::Text("2.34".to_string()),
+            FormatOutput::Text("E+00".to_string()),
+        ]
+    );
+    assert_eq!(plain_text(&parts), "1 2.34E+00");
+}
+
+#[test]
+fn preserves_fill_inside_scientific_exponent() {
+    let format = NumberFormat::parse("0.00E+0*_0").unwrap();
+    let parts = format.format(12.34, &FormatOptions::default());
+
+    assert_eq!(
+        parts,
+        vec![
+            FormatOutput::Text("1.23".to_string()),
+            FormatOutput::Text("E+0".to_string()),
+            FormatOutput::Fill('_'),
+            FormatOutput::Text("1".to_string()),
+        ]
+    );
+    assert_eq!(plain_text(&parts), "1.23E+01");
+}
+
+#[test]
+fn preserves_skip_inside_scientific_exponent() {
+    let format = NumberFormat::parse("0.00E+0_-0").unwrap();
+    let parts = format.format(12.34, &FormatOptions::default());
+
+    assert_eq!(
+        parts,
+        vec![
+            FormatOutput::Text("1.23".to_string()),
+            FormatOutput::Text("E+0".to_string()),
+            FormatOutput::Skip('-'),
+            FormatOutput::Text("1".to_string()),
+        ]
+    );
+    assert_eq!(plain_text(&parts), "1.23E+0 1");
+}
+
+#[test]
+fn preserves_fill_inside_scientific_decimal_run() {
+    let format = NumberFormat::parse("0.0*_0E+00").unwrap();
+    let parts = format.format(12.34, &FormatOptions::default());
+
+    assert_eq!(
+        parts,
+        vec![
+            FormatOutput::Text("1.2".to_string()),
+            FormatOutput::Fill('_'),
+            FormatOutput::Text("3".to_string()),
+            FormatOutput::Text("E+01".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn keeps_negative_scientific_sign_before_inline_fill() {
+    let format = NumberFormat::parse("0*_000.0E+00").unwrap();
+    let parts = format.format(-12.3, &FormatOptions::default());
+
+    assert_eq!(
+        parts,
+        vec![
+            FormatOutput::Text("-".to_string()),
+            FormatOutput::Fill('_'),
+            FormatOutput::Text("12.3".to_string()),
+            FormatOutput::Text("E+00".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn keeps_negative_scientific_mantissa_coalesced() {
+    let format = NumberFormat::parse("0.00E+00").unwrap();
+    let parts = format.format(-12.34, &FormatOptions::default());
+
+    assert_eq!(
+        parts,
+        vec![
+            FormatOutput::Text("-1.23".to_string()),
+            FormatOutput::Text("E+01".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn preserves_fill_inside_zero_exponent() {
+    let format = NumberFormat::parse("0.00E+0*_0").unwrap();
+    let parts = format.format(0.0, &FormatOptions::default());
+
+    assert_eq!(
+        parts,
+        vec![
+            FormatOutput::Text("0.00".to_string()),
+            FormatOutput::Text("E+0".to_string()),
+            FormatOutput::Fill('_'),
+            FormatOutput::Text("0".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn preserves_literal_inside_scientific_mantissa() {
+    let format = NumberFormat::parse("0\"x\"0.00E+00").unwrap();
+    let parts = format.format(12.34, &FormatOptions::default());
+
+    assert_eq!(
+        parts,
+        vec![
+            FormatOutput::Text("1x2.34".to_string()),
+            FormatOutput::Text("E+00".to_string()),
+        ]
+    );
+}
+
+#[test]
 fn preserves_fill_between_integer_placeholders() {
     let format = NumberFormat::parse("0*_0").unwrap();
     let parts = format.format(12.0, &FormatOptions::default());

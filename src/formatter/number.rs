@@ -788,8 +788,9 @@ fn format_scientific(
         let exp_char = if upper { 'E' } else { 'e' };
         let sign = if show_plus { "+" } else { "" };
         let mantissa = format!("0{}", decimal_part);
-        let exponent = format!("{}{sign}00", exp_char);
-        return compose_scientific_output(section, mantissa, exponent);
+        let exponent_prefix = format!("{}{sign}", exp_char);
+
+        return compose_scientific_output(section, mantissa, exponent_prefix, "00".to_string());
     }
 
     // Calculate exponent based on integer placeholder count
@@ -845,15 +846,16 @@ fn format_scientific(
     } else {
         mantissa_str
     };
-    let exponent = format!("{}{}{}", exp_char, exp_sign, exp_str);
+    let exponent_prefix = format!("{}{}", exp_char, exp_sign);
 
-    compose_scientific_output(section, mantissa, exponent)
+    compose_scientific_output(section, mantissa, exponent_prefix, exp_str)
 }
 
 fn compose_scientific_output(
     section: &Section,
     mantissa: String,
-    exponent: String,
+    exponent_prefix: String,
+    exponent_digits: String,
 ) -> Result<Vec<FormatOutput>, FormatError> {
     let scientific_index = section
         .parts
@@ -863,53 +865,182 @@ fn compose_scientific_output(
             expected: "scientific format",
             got: "scientific format without exponent marker",
         })?;
-    let first_mantissa_digit = section.parts[..scientific_index]
+    let mantissa_parts = &section.parts[..scientific_index];
+    let exponent_parts = &section.parts[scientific_index + 1..];
+    let first_mantissa_digit = mantissa_parts
         .iter()
         .position(|part| matches!(part, FormatPart::Digit(_)))
         .ok_or(FormatError::TypeMismatch {
             expected: "scientific format",
             got: "scientific format without mantissa digit placeholders",
         })?;
-    let last_mantissa_digit = section.parts[..scientific_index]
-        .iter()
-        .rposition(|part| matches!(part, FormatPart::Digit(_)))
-        .ok_or(FormatError::TypeMismatch {
-            expected: "scientific format",
-            got: "scientific format without mantissa digit placeholders",
-        })?;
-    let last_exponent_digit = section.parts[scientific_index + 1..]
-        .iter()
-        .rposition(|part| matches!(part, FormatPart::Digit(_)))
-        .map(|index| scientific_index + 1 + index)
-        .ok_or(FormatError::TypeMismatch {
+    let (first_exponent_digit, last_exponent_digit) =
+        digit_bounds(exponent_parts).ok_or(FormatError::TypeMismatch {
             expected: "scientific format",
             got: "scientific format without exponent digit placeholders",
         })?;
+    let decimal_index = mantissa_parts
+        .iter()
+        .position(|part| matches!(part, FormatPart::DecimalPoint));
+    let integer_end = decimal_index.unwrap_or(mantissa_parts.len());
+    let integer_parts = &mantissa_parts[..integer_end];
+    let integer_bounds = digit_bounds(integer_parts);
+    let prefix_end = integer_bounds
+        .map(|(first, _)| first)
+        .unwrap_or_else(|| decimal_index.unwrap_or(first_mantissa_digit));
+    let (mantissa_integer, mantissa_decimal) = mantissa
+        .split_once('.')
+        .map_or((mantissa.as_str(), None), |(integer, decimal)| {
+            (integer, Some(decimal))
+        });
+    let (mantissa_sign, mantissa_integer) = mantissa_integer
+        .strip_prefix('-')
+        .map_or((None, mantissa_integer), |integer| (Some('-'), integer));
 
-    let prefix_len = first_mantissa_digit;
-    let infix_len = scientific_index.saturating_sub(last_mantissa_digit + 1);
-    let suffix_len = section.parts.len().saturating_sub(last_exponent_digit + 1);
-    let mut result = Vec::with_capacity(prefix_len + infix_len + suffix_len + 2);
-
+    let mut result = Vec::new();
     result.extend(
-        section.parts[..first_mantissa_digit]
+        mantissa_parts[..prefix_end]
             .iter()
             .filter_map(output_for_part),
     );
-    result.push(FormatOutput::Text(mantissa));
+
+    let mut mantissa_output = Vec::new();
+    if let Some(sign) = mantissa_sign {
+        push_output(&mut mantissa_output, FormatOutput::Text(sign.to_string()));
+    }
+    let mantissa_trailing_start;
+
+    if let Some(decimal_index) = decimal_index {
+        if let Some((first_integer_digit, last_integer_digit)) = integer_bounds {
+            for output in compose_scientific_digit_run(
+                &integer_parts[first_integer_digit..=last_integer_digit],
+                mantissa_integer,
+            ) {
+                push_output(&mut mantissa_output, output);
+            }
+            for output in integer_parts[last_integer_digit + 1..]
+                .iter()
+                .filter_map(output_for_part)
+            {
+                push_output(&mut mantissa_output, output);
+            }
+        } else {
+            push_output(
+                &mut mantissa_output,
+                FormatOutput::Text(mantissa_integer.to_string()),
+            );
+        }
+
+        if let Some(decimal) = mantissa_decimal {
+            push_output(&mut mantissa_output, FormatOutput::Text(".".to_string()));
+            let decimal_parts = &mantissa_parts[decimal_index + 1..];
+            if let Some((first_decimal_digit, last_decimal_digit)) = digit_bounds(decimal_parts) {
+                for output in decimal_parts[..first_decimal_digit]
+                    .iter()
+                    .filter_map(output_for_part)
+                {
+                    push_output(&mut mantissa_output, output);
+                }
+                for output in compose_scientific_digit_run(
+                    &decimal_parts[first_decimal_digit..=last_decimal_digit],
+                    decimal,
+                ) {
+                    push_output(&mut mantissa_output, output);
+                }
+                mantissa_trailing_start = decimal_index + 1 + last_decimal_digit + 1;
+            } else {
+                mantissa_trailing_start = decimal_index + 1;
+            }
+        } else {
+            mantissa_trailing_start = decimal_index;
+        }
+    } else {
+        let (first_integer_digit, last_integer_digit) =
+            integer_bounds.ok_or(FormatError::TypeMismatch {
+                expected: "scientific format",
+                got: "scientific format without mantissa digit placeholders",
+            })?;
+        for output in compose_scientific_digit_run(
+            &integer_parts[first_integer_digit..=last_integer_digit],
+            mantissa_integer,
+        ) {
+            push_output(&mut mantissa_output, output);
+        }
+        mantissa_trailing_start = last_integer_digit + 1;
+    }
+
+    result.extend(mantissa_output);
     result.extend(
-        section.parts[last_mantissa_digit + 1..scientific_index]
+        mantissa_parts[mantissa_trailing_start..]
             .iter()
             .filter_map(output_for_part),
     );
-    result.push(FormatOutput::Text(exponent));
+
+    let mut exponent_output = vec![FormatOutput::Text(exponent_prefix)];
+    for output in exponent_parts[..first_exponent_digit]
+        .iter()
+        .filter_map(output_for_part)
+    {
+        push_output(&mut exponent_output, output);
+    }
+    for output in compose_scientific_digit_run(
+        &exponent_parts[first_exponent_digit..=last_exponent_digit],
+        &exponent_digits,
+    ) {
+        push_output(&mut exponent_output, output);
+    }
+    result.extend(exponent_output);
     result.extend(
-        section.parts[last_exponent_digit + 1..]
+        exponent_parts[last_exponent_digit + 1..]
             .iter()
             .filter_map(output_for_part),
     );
 
     Ok(result)
+}
+
+fn compose_scientific_digit_run(parts: &[FormatPart], rendered_digits: &str) -> Vec<FormatOutput> {
+    let placeholder_count = parts
+        .iter()
+        .filter(|part| matches!(part, FormatPart::Digit(_)))
+        .count();
+    let digits: Vec<char> = rendered_digits.chars().collect();
+    let missing = placeholder_count.saturating_sub(digits.len());
+    let extra = digits.len().saturating_sub(placeholder_count);
+    let mut placeholder_index = 0;
+    let mut digit_index = 0;
+    let mut result = Vec::new();
+
+    for part in parts {
+        if matches!(part, FormatPart::Digit(_)) {
+            if placeholder_index >= missing && digit_index < digits.len() {
+                let take = if placeholder_index == missing {
+                    extra + 1
+                } else {
+                    1
+                };
+                let end = (digit_index + take).min(digits.len());
+                let text: String = digits[digit_index..end].iter().collect();
+                push_output(&mut result, FormatOutput::Text(text));
+                digit_index = end;
+            }
+            placeholder_index += 1;
+        } else if let Some(output) = output_for_part(part) {
+            push_output(&mut result, output);
+        }
+    }
+
+    result
+}
+
+fn digit_bounds(parts: &[FormatPart]) -> Option<(usize, usize)> {
+    let first = parts
+        .iter()
+        .position(|part| matches!(part, FormatPart::Digit(_)))?;
+    let last = parts
+        .iter()
+        .rposition(|part| matches!(part, FormatPart::Digit(_)))?;
+    Some((first, last))
 }
 
 #[cfg(test)]
