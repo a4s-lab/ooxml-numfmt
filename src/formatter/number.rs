@@ -516,7 +516,7 @@ fn format_integer(
         // Add any inline literals that would be in the optional placeholder region
         // Sort by position (descending) to add them left-to-right
         let mut sorted_literals: Vec<_> = inline_literals.iter().collect();
-        sorted_literals.sort_by(|a, b| b.0.cmp(&a.0)); // Descending order
+        sorted_literals.sort_by_key(|a| std::cmp::Reverse(a.0)); // Descending order
 
         for (_literal_pos, literal_str) in sorted_literals {
             // Add literals in order (left to right)
