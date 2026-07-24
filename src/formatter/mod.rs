@@ -17,7 +17,7 @@ pub use bigint::{fallback_format_bigint, format_bigint, is_safe_integer};
 use crate::ast::{FormatPart, NumberFormat, Section};
 use crate::error::FormatError;
 use crate::options::FormatOptions;
-use crate::output::{text_if_nonempty, FormatOutput};
+use crate::output::{output_for_part, text_if_nonempty, FormatOutput};
 
 impl NumberFormat {
     /// Format a numeric value using this format code.
@@ -204,14 +204,10 @@ impl NumberFormat {
             let mut result = Vec::with_capacity(text_section.parts.len());
 
             for part in &text_section.parts {
-                match part {
-                    FormatPart::TextPlaceholder => {
-                        result.push(FormatOutput::Text(text.to_string()))
-                    }
-                    FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => {
-                        result.push(FormatOutput::Text(s.clone()))
-                    }
-                    _ => {}
+                if matches!(part, FormatPart::TextPlaceholder) {
+                    result.push(FormatOutput::Text(text.to_string()));
+                } else if let Some(output) = output_for_part(part) {
+                    result.push(output);
                 }
             }
 

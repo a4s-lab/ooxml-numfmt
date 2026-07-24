@@ -65,6 +65,36 @@ fn preserves_fill_between_scientific_mantissa_and_exponent() {
 }
 
 #[test]
+fn preserves_fill_in_text_section() {
+    let format = NumberFormat::parse("0;0;0;@*.").unwrap();
+    let parts = format.format_text("abc", &FormatOptions::default());
+
+    assert_eq!(
+        parts,
+        vec![
+            FormatOutput::Text("abc".to_string()),
+            FormatOutput::Fill('.'),
+        ]
+    );
+    assert_eq!(plain_text(&parts), "abc");
+}
+
+#[test]
+fn preserves_skip_in_text_section() {
+    let format = NumberFormat::parse("0;0;0;@_)").unwrap();
+    let parts = format.format_text("abc", &FormatOptions::default());
+
+    assert_eq!(
+        parts,
+        vec![
+            FormatOutput::Text("abc".to_string()),
+            FormatOutput::Skip(')'),
+        ]
+    );
+    assert_eq!(plain_text(&parts), "abc ");
+}
+
+#[test]
 fn date_skip_reserves_width_instead_of_displaying_character() {
     let format = NumberFormat::parse("yyyy_)").unwrap();
     let parts = format.format(46031.0, &FormatOptions::default());
