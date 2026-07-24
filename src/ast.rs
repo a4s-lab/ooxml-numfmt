@@ -324,7 +324,7 @@ pub struct SectionMetadata {
     pub is_hijri: bool,
     /// Maximum subsecond precision (e.g., 3 for .000)
     pub max_subsecond_precision: Option<u8>,
-    /// True if format contains elapsed time components ([h], [m], [s])
+    /// True if format contains elapsed time components (`[h]`, `[m]`, `[s]`)
     pub has_elapsed_time: bool,
     /// Smallest time unit displayed (for pre-rounding)
     pub smallest_time_unit: TimeUnit,
@@ -354,9 +354,9 @@ impl Default for SectionMetadata {
 /// 4. Text
 #[derive(Debug, Clone, PartialEq)]
 pub struct Section {
-    /// Optional condition for this section (e.g., [>100])
+    /// Optional condition for this section (e.g., `[>100]`)
     pub condition: Option<Condition>,
-    /// Optional color for this section (e.g., [Red])
+    /// Optional color for this section (e.g., `[Red]`)
     pub color: Option<Color>,
     /// The format parts that make up this section
     pub parts: Vec<FormatPart>,
