@@ -37,7 +37,6 @@ See [docs/TESTING.md](docs/TESTING.md) for detailed test coverage.
 
 - [Architecture Guide](docs/ARCHITECTURE.md) - Design principles and key components
 - [Test Coverage](docs/TESTING.md) - Comprehensive testing documentation
-- [Implementation Plans](docs/plans/) - Original design and implementation notes
 
 ## License
 
