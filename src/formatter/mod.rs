@@ -124,7 +124,7 @@ impl NumberFormat {
     /// - 2 sections: first for positive/zero, second for negative
     /// - 3 sections: positive, negative, zero
     /// - 4 sections: positive, negative, zero, text
-    fn select_section(&self, value: f64) -> &Section {
+    pub fn select_section(&self, value: f64) -> &Section {
         let sections = self.sections();
 
         // Check if any section has conditions
