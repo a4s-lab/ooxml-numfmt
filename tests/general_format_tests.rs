@@ -86,76 +86,83 @@ fn test_general_format_vs_broken_behavior() {
 }
 
 #[test]
-fn test_general_format_large_integers_no_scientific() {
-    // Excel's General format displays exact integers without scientific notation
-    // These tests verify that large integers are displayed as-is
-
-    // The value from the bug report
+fn test_general_format_large_integers_use_scientific() {
     assert_eq!(
         format_default(484079807176.0, "General").unwrap(),
-        "484079807176"
+        "4.8408E+11"
     );
 
-    // Values around the old 1e11 threshold
-    assert_eq!(
-        format_default(100000000000.0, "General").unwrap(),
-        "100000000000"
-    );
+    // Values around the 1E11 threshold.
+    assert_eq!(format_default(100000000000.0, "General").unwrap(), "1E+11");
     assert_eq!(
         format_default(99999999999.0, "General").unwrap(),
         "99999999999"
     );
-    assert_eq!(
-        format_default(100000000001.0, "General").unwrap(),
-        "100000000001"
-    );
+    assert_eq!(format_default(100000000001.0, "General").unwrap(), "1E+11");
 
-    // Larger exact integers (within safe f64 range)
-    assert_eq!(
-        format_default(1000000000000.0, "General").unwrap(),
-        "1000000000000"
-    );
+    // Larger exact integers within the safe f64 range.
+    assert_eq!(format_default(1000000000000.0, "General").unwrap(), "1E+12");
     assert_eq!(
         format_default(9007199254740991.0, "General").unwrap(),
-        "9007199254740991"
+        "9.0072E+15"
     ); // 2^53 - 1
 
-    // Negative large integers
     assert_eq!(
         format_default(-484079807176.0, "General").unwrap(),
-        "-484079807176"
+        "-4.8408E+11"
     );
     assert_eq!(
         format_default(-100000000000.0, "General").unwrap(),
-        "-100000000000"
+        "-1E+11"
     );
 }
 
 #[test]
-fn test_text_format_large_integers_no_scientific() {
-    // The @ format means "text" and should display numbers as-is without scientific notation
+fn test_general_format_rounding_crosses_scientific_boundary() {
+    assert_eq!(
+        format_default(99_999_999_999.5, "General").unwrap(),
+        "1E+11"
+    );
+    assert_eq!(
+        format_default(-99_999_999_999.5, "General").unwrap(),
+        "-1E+11"
+    );
 
-    // The value from the bug report
-    assert_eq!(format_default(484079807176.0, "@").unwrap(), "484079807176");
+    // Nearby values that do not round across the boundary stay in fixed notation.
+    assert_eq!(
+        format_default(99_999_999_999.4, "General").unwrap(),
+        "99999999999"
+    );
+    assert_eq!(
+        format_default(-99_999_999_999.4, "General").unwrap(),
+        "-99999999999"
+    );
 
-    // Values around the old 1e11 threshold
-    assert_eq!(format_default(100000000000.0, "@").unwrap(), "100000000000");
+    // Exact integers at the boundary use the same scientific notation.
+    assert_eq!(
+        format_default(100_000_000_000.0, "General").unwrap(),
+        "1E+11"
+    );
+    assert_eq!(
+        format_default(-100_000_000_000.0, "General").unwrap(),
+        "-1E+11"
+    );
+}
+
+#[test]
+fn test_text_format_uses_scientific_boundary() {
+    assert_eq!(format_default(484079807176.0, "@").unwrap(), "4.8408E+11");
+
+    // Values around the 1E11 threshold.
+    assert_eq!(format_default(100000000000.0, "@").unwrap(), "1E+11");
     assert_eq!(format_default(99999999999.0, "@").unwrap(), "99999999999");
-    assert_eq!(format_default(100000000001.0, "@").unwrap(), "100000000001");
+    assert_eq!(format_default(100000000001.0, "@").unwrap(), "1E+11");
+    assert_eq!(format_default(1000000000000.0, "@").unwrap(), "1E+12");
 
-    // Larger exact integers
-    assert_eq!(
-        format_default(1000000000000.0, "@").unwrap(),
-        "1000000000000"
-    );
+    // @ reevaluates notation when fixed formatting rounds across the boundary.
+    assert_eq!(format_default(99_999_999_999.5, "@").unwrap(), "1E+11");
+    assert_eq!(format_default(-99_999_999_999.5, "@").unwrap(), "-1E+11");
 
-    // Negative large integers
-    assert_eq!(
-        format_default(-484079807176.0, "@").unwrap(),
-        "-484079807176"
-    );
-    assert_eq!(
-        format_default(-100000000000.0, "@").unwrap(),
-        "-100000000000"
-    );
+    assert_eq!(format_default(-484079807176.0, "@").unwrap(), "-4.8408E+11");
+    assert_eq!(format_default(-100000000000.0, "@").unwrap(), "-1E+11");
 }

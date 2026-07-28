@@ -289,51 +289,70 @@ impl NumberFormat {
 ///
 /// Implements Excel's "General" number format behavior:
 /// - Very small numbers (0 < |x| < 1E-4) use scientific notation
-/// - Exact integers within safe range are displayed without scientific notation
-/// - Floating point numbers with many significant digits may use scientific notation
+/// - Exact integers below 1E11 are displayed without scientific notation
+/// - Values at or above 1E11 use scientific notation
 /// - No trailing zeros after decimal point
 pub fn fallback_format(value: f64) -> String {
-    // Handle zero
+    // Handle zero and non-finite values before decimal precision calculations.
     if value == 0.0 {
         return "0".to_string();
     }
+    if !value.is_finite() {
+        return value.to_string();
+    }
 
-    // Integer fast path: check if value is a whole integer
-    // This avoids expensive log10() and format!() operations for common integer values
-    // Safe integer range for f64 is < 2^53 (9007199254740992)
-    // Excel displays exact integers without scientific notation (scientific notation
-    // is only used for display width reasons, which we don't have here)
-    const MAX_SAFE_INTEGER: u64 = 9007199254740992; // 2^53
+    // Integer fast path for exact values below the scientific boundary.
     let int_val = value.trunc() as i64;
-    if (value - int_val as f64).abs() < f64::EPSILON && value.abs() >= 1.0 {
-        let abs_int = int_val.unsigned_abs();
-        // For exact integers within the safe f64 range, display without scientific notation
-        // This matches Excel's behavior where General format shows integers as-is
-        if abs_int < MAX_SAFE_INTEGER {
-            return if value < 0.0 {
-                format!("-{}", abs_int)
-            } else {
-                abs_int.to_string()
-            };
-        }
+    if (value - int_val as f64).abs() < f64::EPSILON && value.abs() >= 1.0 && value.abs() < 1e11 {
+        return int_val.to_string();
     }
 
     let abs_value = value.abs();
 
-    // At this point, we're dealing with non-integer values (integers handled above)
-    // For non-integer values, use scientific notation for:
-    // 1. Very small numbers (< 0.0001) that would have too many leading zeros
-    // 2. Very large non-integer values (>= 1E11) where precision is limited anyway
-    // Note: Exact integers are handled above and never use scientific notation
+    // Choose fixed precision and round before deciding which notation to return.
+    // Excel's General format shows up to 11 characters total (including decimal point)
+    // but we need to be smart about significant figures.
+    let decimal_formatted = if abs_value >= 1.0 {
+        // For numbers >= 1, format with appropriate decimal places.
+        let integer_digits = abs_value.log10().floor() as usize + 1;
+        let decimal_places = if integer_digits >= 10 {
+            0
+        } else {
+            (10 - integer_digits).min(10)
+        };
+        format!("{:.prec$}", value, prec = decimal_places)
+    } else {
+        // For numbers < 1, format with up to 9 decimal places (to fit in 11 chars: "0." + 9 digits)
+        // Excel's limit is 11 chars for the numeric part, not counting the sign
+        // So negative numbers can be up to 12 chars total
+        let max_decimals = 9;
+        let test_format = format!("{:.prec$}", value, prec = max_decimals);
 
-    // Check if we should use scientific notation
-    let use_scientific = if abs_value >= 1e11 {
-        // Large non-integer values use scientific notation
-        true
-    } else if abs_value > 0.0 && abs_value < 0.0001 {
-        // For very small numbers (< 0.0001), check if decimal representation fits in 11 chars
-        // Excel uses decimal notation for values >= 0.0001, even if they need rounding
-        // But for values < 0.0001, it uses scientific if the representation is too long
+        // Check length of numeric part only (excluding sign for negative numbers)
+        let numeric_part = if value < 0.0 {
+            &test_format[1..] // Skip the '-' sign
+        } else {
+            &test_format[..]
+        };
+
+        // If numeric part exceeds 11 chars, reduce decimal places
+        if numeric_part.len() > 11 {
+            let excess = numeric_part.len() - 11;
+            let reduced_decimals = max_decimals.saturating_sub(excess);
+            format!("{:.prec$}", value, prec = reduced_decimals)
+        } else {
+            test_format
+        }
+    };
+
+    let rounded_reaches_boundary = decimal_formatted
+        .parse::<f64>()
+        .map(|rounded| rounded.abs() >= 1e11)
+        .unwrap_or(false);
+
+    // Very small values use scientific notation when their decimal representation
+    // does not fit within General's 11-character limit.
+    let small_value_needs_scientific = if abs_value > 0.0 && abs_value < 0.0001 {
         let test_str = format!("{:.15}", abs_value);
         // Trim trailing zeros
         let trimmed = test_str.trim_end_matches('0').trim_end_matches('.');
@@ -343,6 +362,8 @@ pub fn fallback_format(value: f64) -> String {
     } else {
         false
     };
+
+    let use_scientific = rounded_reaches_boundary || small_value_needs_scientific;
 
     if use_scientific {
         // Format in scientific notation with up to 5 decimal places
@@ -367,54 +388,17 @@ pub fn fallback_format(value: f64) -> String {
         }
     } else {
         // Use decimal notation
-        // Excel's General format shows up to 11 characters total (including decimal point)
-        // but we need to be smart about significant figures
-
-        // Try to format with enough precision to show the value accurately
-        // but within Excel's 11-digit display limit
-        let formatted = if abs_value >= 1.0 {
-            // For numbers >= 1, format with appropriate decimal places
-            let integer_digits = abs_value.log10().floor() as usize + 1;
-            let decimal_places = if integer_digits >= 10 {
-                0
-            } else {
-                (10 - integer_digits).min(10)
-            };
-            format!("{:.prec$}", value, prec = decimal_places)
-        } else {
-            // For numbers < 1, format with up to 9 decimal places (to fit in 11 chars: "0." + 9 digits)
-            // Excel's limit is 11 chars for the numeric part, not counting the sign
-            // So negative numbers can be up to 12 chars total
-            let max_decimals = 9;
-            let test_format = format!("{:.prec$}", value, prec = max_decimals);
-
-            // Check length of numeric part only (excluding sign for negative numbers)
-            let numeric_part = if value < 0.0 {
-                &test_format[1..] // Skip the '-' sign
-            } else {
-                &test_format[..]
-            };
-
-            // If numeric part exceeds 11 chars, reduce decimal places
-            if numeric_part.len() > 11 {
-                let excess = numeric_part.len() - 11;
-                let reduced_decimals = max_decimals.saturating_sub(excess);
-                format!("{:.prec$}", value, prec = reduced_decimals)
-            } else {
-                test_format
-            }
-        };
 
         // Trim trailing zeros after decimal point
-        if formatted.contains('.') {
-            let trimmed = formatted.trim_end_matches('0');
+        if decimal_formatted.contains('.') {
+            let trimmed = decimal_formatted.trim_end_matches('0');
             if trimmed.ends_with('.') {
                 trimmed.trim_end_matches('.').to_string()
             } else {
                 trimmed.to_string()
             }
         } else {
-            formatted
+            decimal_formatted
         }
     }
 }
