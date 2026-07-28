@@ -81,7 +81,7 @@ TSV fixtures are stored as `.tsv.gz` files and decompressed during tests with `f
 - **Total passing**: 19,575,042
 - **Total failing**: 1,772
 - **Total skipped**: 108
-- **Overall pass rate**: 99.9909% of evaluated cases
+- **Overall pass rate**: 99.99% of evaluated cases
 
 ## Failed Cases
 
