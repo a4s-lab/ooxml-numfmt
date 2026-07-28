@@ -298,24 +298,10 @@ pub fn fallback_format(value: f64) -> String {
         return "0".to_string();
     }
 
-    // Integer fast path: check if value is a whole integer
-    // This avoids expensive log10() and format!() operations for common integer values
-    // Safe integer range for f64 is < 2^53 (9007199254740992)
-    // Excel displays exact integers without scientific notation (scientific notation
-    // is only used for display width reasons, which we don't have here)
-    const MAX_SAFE_INTEGER: u64 = 9007199254740992; // 2^53
+    // Integer fast path for exact values below the scientific boundary.
     let int_val = value.trunc() as i64;
-    if (value - int_val as f64).abs() < f64::EPSILON && value.abs() >= 1.0 {
-        let abs_int = int_val.unsigned_abs();
-        // For exact integers within the safe f64 range, display without scientific notation
-        // This matches Excel's behavior where General format shows integers as-is
-        if abs_int < MAX_SAFE_INTEGER {
-            return if value < 0.0 {
-                format!("-{}", abs_int)
-            } else {
-                abs_int.to_string()
-            };
-        }
+    if (value - int_val as f64).abs() < f64::EPSILON && value.abs() >= 1.0 && value.abs() < 1e11 {
+        return int_val.to_string();
     }
 
     let abs_value = value.abs();
