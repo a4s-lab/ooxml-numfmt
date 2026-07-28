@@ -25,11 +25,11 @@ cargo test --release --test ssf_oddities_tests -- --nocapture
 
 1. **ssf_implied_tests.rs** - `implied.json`
    - Tests Excel's 49 built-in format IDs (0-49)
-   - **Status**: 584/672 (86.9%) - 84 skipped, 4 failing
+   - **Status**: 588/672 (87.5%) - 84 skipped
 
 2. **ssf_general_tests.rs** - `general.json`
    - Tests general number formatting with various format codes
-   - **Status**: 431/493 (87.4%) - 62 failing
+   - **Status**: 493/493 (100%) ✅
 
 3. **ssf_fraction_tests.rs** - `fraction.json`
    - Tests fraction formatting (mixed and improper fractions)
@@ -78,14 +78,12 @@ TSV fixtures are stored as `.tsv.gz` files and decompressed during tests with `f
 ## Summary
 
 - **Total test cases**: 19,576,922
-- **Total passing**: 19,574,976
-- **Total failing**: 1,838
+- **Total passing**: 19,575,042
+- **Total failing**: 1,772
 - **Total skipped**: 108
-- **Overall pass rate**: 99.9906% of evaluated cases
+- **Overall pass rate**: 99.9909% of evaluated cases
 
 ## Failed Cases
 
-- **General number formatting**: 62
-- **Implied formats**: 4
 - **Oddities**: 4
 - **Time formatting**: 1,768
