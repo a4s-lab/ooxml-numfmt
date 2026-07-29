@@ -1,6 +1,6 @@
 //! Tests for the format code parser.
 
-use ooxml_numfmt::ast::{Color, DatePart, FormatPart, NamedColor};
+use ooxml_numfmt::ast::{Color, DatePart, DigitPlaceholder, FormatPart, NamedColor};
 use ooxml_numfmt::NumberFormat;
 
 #[test]
@@ -65,4 +65,16 @@ fn test_minute_vs_month_disambiguation() {
         .iter()
         .any(|p| matches!(p, FormatPart::DatePart(DatePart::Minute2)));
     assert!(has_minute, "Expected Minute2 after hour");
+}
+
+#[test]
+fn test_fill_treats_date_tokens_as_literal_characters() {
+    for fill in [
+        'B', 'b', 'y', 'Y', 'm', 'M', 'd', 'D', 'h', 'H', 's', 'S', 'E', 'e',
+    ] {
+        let format_code = format!("*{fill}");
+        let fmt = NumberFormat::parse(&format_code).unwrap();
+
+        assert_eq!(fmt.sections()[0].parts, vec![FormatPart::Fill(fill)]);
+    }
 }

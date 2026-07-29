@@ -174,12 +174,11 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                 }
                 Token::Asterisk => {
-                    // Fill character - next char is the fill
-                    self.advance()?;
-                    if let Some(ch) = self.get_literal_char() {
+                    // Fill character - next source character is the fill
+                    if let Some(ch) = self.lexer.next_literal_char() {
                         builder.add_part(FormatPart::Fill(ch));
-                        self.advance()?;
                     }
+                    self.advance()?;
                 }
                 Token::Underscore => {
                     // Skip character - next char is the skip width
