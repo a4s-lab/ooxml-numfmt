@@ -619,6 +619,11 @@ impl SectionBuilder {
     }
 
     fn add_part(&mut self, part: FormatPart) {
+        // `Fill` parts replace any existing `Fill` parts, keeping only the last one
+        if matches!(&part, FormatPart::Fill(_)) {
+            self.parts
+                .retain(|part| !matches!(part, FormatPart::Fill(_)));
+        }
         self.parts.push(part);
     }
 

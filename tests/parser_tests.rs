@@ -78,3 +78,16 @@ fn test_fill_treats_date_tokens_as_literal_characters() {
         assert_eq!(fmt.sections()[0].parts, vec![FormatPart::Fill(fill)]);
     }
 }
+
+#[test]
+fn test_parse_multiple_fill_operators_keeps_only_last() {
+    let fmt = NumberFormat::parse("*A0*B").unwrap();
+
+    assert_eq!(
+        fmt.sections()[0].parts,
+        vec![
+            FormatPart::Digit(DigitPlaceholder::Zero),
+            FormatPart::Fill('B'),
+        ]
+    );
+}
