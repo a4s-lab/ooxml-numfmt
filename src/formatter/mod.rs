@@ -14,7 +14,7 @@ pub use number::format_number;
 #[allow(unused_imports)]
 pub use bigint::{fallback_format_bigint, format_bigint, is_safe_integer};
 
-use crate::ast::{FormatPart, NumberFormat, Section};
+use crate::ast::{FormatPart, NumberFormat};
 use crate::error::FormatError;
 use crate::options::FormatOptions;
 
@@ -49,11 +49,12 @@ impl NumberFormat {
         }
 
         // Select the appropriate section based on value
-        let section = self.select_section(value);
+        let sections = self.sections();
+        let section = &sections[self.select_section_index(value)];
 
         // Excel behavior: when a conditional section strictly matches, format using absolute value
         // Use absolute value only when the condition is strictly satisfied (not at boundary)
-        let has_conditions = self.sections().iter().any(|s| s.condition.is_some());
+        let has_conditions = sections.iter().any(|s| s.condition.is_some());
         let use_abs_value = has_conditions
             && section.condition.is_some()
             && section.condition.unwrap().is_strict_match(value);
@@ -84,7 +85,6 @@ impl NumberFormat {
         // For literal-only formats (no numeric parts), add minus ONLY if it's a single unescaped single-char literal
         // But NOT if we're using absolute value due to conditional matching
         // EXCEPTION: Fraction and scientific notation formats add their own minus sign
-        let sections = self.sections();
         let num_sections = sections.len();
         let has_numeric_parts = section.parts.iter().any(|p| p.is_numeric_part());
         let is_single_char_literal = section.parts.len() == 1
@@ -117,14 +117,14 @@ impl NumberFormat {
         Ok(result)
     }
 
-    /// Select the appropriate format section based on the value.
+    /// Return the index of the appropriate format section based on the value.
     ///
     /// Section selection rules:
     /// - 1 section: used for all values
     /// - 2 sections: first for positive/zero, second for negative
     /// - 3 sections: positive, negative, zero
     /// - 4 sections: positive, negative, zero, text
-    pub fn select_section(&self, value: f64) -> &Section {
+    pub fn select_section_index(&self, value: f64) -> usize {
         let sections = self.sections();
 
         // Check if any section has conditions
@@ -132,36 +132,36 @@ impl NumberFormat {
 
         if has_conditions {
             // With conditions: find matching conditional, or first non-conditional
-            for section in sections {
+            for (index, section) in sections.iter().enumerate() {
                 if let Some(ref condition) = section.condition {
                     if condition.evaluate(value) {
-                        return section;
+                        return index;
                     }
                 } else {
                     // No condition on this section - use it as fallback
-                    return section;
+                    return index;
                 }
             }
             // Fallback to last section if nothing matched
-            return sections.last().unwrap();
+            return sections.len() - 1;
         }
 
         // Standard section selection based on value sign (no conditions)
         match sections.len() {
             0 => unreachable!("NumberFormat should always have at least one section"),
-            1 => &sections[0],
+            1 => 0,
             2 => {
                 if value < 0.0 {
-                    &sections[1]
+                    1
                 } else {
-                    &sections[0]
+                    0
                 }
             }
             3 | 4 => {
                 if value > 0.0 {
-                    &sections[0]
+                    0
                 } else if value < 0.0 {
-                    &sections[1]
+                    1
                 } else {
                     // Zero value - use section[2]
                     // Unless it's text-only (@), then use positive section
@@ -174,13 +174,13 @@ impl NumberFormat {
                                 )
                         })
                     {
-                        &sections[0]
+                        0
                     } else {
-                        &sections[2]
+                        2
                     }
                 }
             }
-            _ => &sections[0],
+            _ => 0,
         }
     }
 
