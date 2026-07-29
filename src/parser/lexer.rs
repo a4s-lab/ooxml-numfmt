@@ -265,6 +265,13 @@ impl<'a> Lexer<'a> {
         Ok(SpannedToken { token, start, end })
     }
 
+    /// Consumes the next character without interpreting it as a format token.
+    pub(crate) fn next_literal_char(&mut self) -> Option<char> {
+        let ch = self.current_char();
+        self.advance();
+        ch
+    }
+
     /// Returns the character at the current position, if any.
     fn current_char(&self) -> Option<char> {
         self.input[self.position..].chars().next()
