@@ -40,6 +40,9 @@ pub(super) fn evaluate_bigint(
         })),
         SectionKind::Literal | SectionKind::Text => {
             Ok(super::evaluate_operations(plan, |_, part| match part {
+                FormatPart::TextPlaceholder if plan.kind == SectionKind::Text => {
+                    Some(value.to_string())
+                }
                 FormatPart::Locale(locale) => locale.currency.clone(),
                 FormatPart::Percent => Some("%".to_string()),
                 _ => None,

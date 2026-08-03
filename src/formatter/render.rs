@@ -32,7 +32,22 @@ pub(crate) fn resolve_layout(
     parts: &[RenderPart],
     fill_count: usize,
 ) -> Result<String, FormatError> {
+    let capacity = parts.iter().try_fold(0_usize, |capacity, part| {
+        let additional = match part {
+            RenderPart::Text(text) => text.len(),
+            RenderPart::Fill(character) => fill_count
+                .checked_mul(character.len_utf8())
+                .ok_or(FormatError::OutputTooLarge { fill_count })?,
+            RenderPart::Skip(_) => 1,
+        };
+        capacity
+            .checked_add(additional)
+            .ok_or(FormatError::OutputTooLarge { fill_count })
+    })?;
     let mut output = String::new();
+    output
+        .try_reserve(capacity)
+        .map_err(|_| FormatError::OutputTooLarge { fill_count })?;
 
     for part in parts {
         match part {
@@ -95,6 +110,30 @@ mod tests {
                 RenderPart::Fill('.'),
                 RenderPart::Text("c".to_string()),
             ]
+        );
+    }
+
+    #[test]
+    fn rejects_output_length_overflow() {
+        let parts = [RenderPart::Fill('é')];
+
+        assert_eq!(
+            resolve_layout(&parts, usize::MAX),
+            Err(FormatError::OutputTooLarge {
+                fill_count: usize::MAX,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_unreservable_output() {
+        let parts = [RenderPart::Fill('x')];
+
+        assert_eq!(
+            resolve_layout(&parts, usize::MAX),
+            Err(FormatError::OutputTooLarge {
+                fill_count: usize::MAX,
+            })
         );
     }
 }

@@ -9,8 +9,6 @@ mod text;
 #[cfg(feature = "bigint")]
 mod bigint;
 
-pub use number::format_number;
-
 #[cfg(feature = "bigint")]
 #[allow(unused_imports)]
 pub use bigint::{fallback_format_bigint, is_safe_integer};
@@ -81,14 +79,14 @@ impl NumberFormat {
             };
             return render::resolve_layout(
                 &[render::RenderPart::Text(fallback_format(truncated_value))],
-                0,
+                opts.fill_count,
             );
         }
 
         // Check if this is a date format
         if plan.kind == SectionKind::DateTime {
             let parts = date::evaluate_date(format_value, plan, opts)?;
-            return render::resolve_layout(&parts, 0);
+            return render::resolve_layout(&parts, opts.fill_count);
         }
 
         // Determine if we need to add a minus sign
@@ -121,7 +119,7 @@ impl NumberFormat {
             if need_minus_sign {
                 parts.insert(0, render::RenderPart::Text("-".to_string()));
             }
-            return render::resolve_layout(&parts, 0);
+            return render::resolve_layout(&parts, opts.fill_count);
         }
 
         if plan.kind == SectionKind::Number {
@@ -129,31 +127,29 @@ impl NumberFormat {
             if need_minus_sign {
                 parts.insert(0, render::RenderPart::Text("-".to_string()));
             }
-            return render::resolve_layout(&parts, 0);
+            return render::resolve_layout(&parts, opts.fill_count);
         }
 
         if plan.kind == SectionKind::Scientific {
             let parts = number::evaluate_scientific(format_value, plan, opts)?;
-            return render::resolve_layout(&parts, 0);
+            return render::resolve_layout(&parts, opts.fill_count);
         }
 
         if plan.kind == SectionKind::Fraction {
             let parts = fraction::evaluate_fraction(format_value, plan, opts)?;
-            return render::resolve_layout(&parts, 0);
+            return render::resolve_layout(&parts, opts.fill_count);
         }
 
-        // Format paths not yet migrated emit one semantic text fragment.
-        let result = format_number(format_value, section, plan, opts)?;
-        let mut parts = vec![render::RenderPart::Text(result)];
-
-        // Add minus sign for single-section formats with negative values
-        // Note: format_number uses abs(value), so it never includes the minus sign
-        // Exception: Fraction and scientific notation formats add their own minus sign
-        if need_minus_sign {
-            parts.insert(0, render::RenderPart::Text("-".to_string()));
+        if plan.kind == SectionKind::Text {
+            let parts = evaluate_operations(plan, |_, part| match part {
+                FormatPart::TextPlaceholder => Some(fallback_format(format_value)),
+                FormatPart::Locale(locale) => locale.currency.clone(),
+                _ => None,
+            });
+            return render::resolve_layout(&parts, opts.fill_count);
         }
 
-        render::resolve_layout(&parts, 0)
+        unreachable!("all compiled section kinds are handled above")
     }
 
     /// Return the index of the appropriate format section based on the value.
@@ -224,13 +220,19 @@ impl NumberFormat {
     }
 
     /// Format a text value using this format code.
-    pub fn format_text(&self, text: &str, _opts: &FormatOptions) -> String {
+    pub fn format_text(&self, text: &str, opts: &FormatOptions) -> String {
+        self.try_format_text(text, opts)
+            .unwrap_or_else(|_| text.to_string())
+    }
+
+    /// Try to format a text value while reporting layout allocation failures.
+    pub fn try_format_text(&self, text: &str, opts: &FormatOptions) -> Result<String, FormatError> {
         if let Some(index) = self.select_text_section_index() {
             let parts = text::evaluate_text(&self.compiled.sections[index], text);
-            render::resolve_layout(&parts, 0).unwrap_or_else(|_| text.to_string())
+            render::resolve_layout(&parts, opts.fill_count)
         } else {
             // Default: return text as-is
-            text.to_string()
+            Ok(text.to_string())
         }
     }
 
@@ -309,7 +311,7 @@ impl NumberFormat {
             parts.insert(0, render::RenderPart::Text("-".to_string()));
         }
 
-        render::resolve_layout(&parts, 0)
+        render::resolve_layout(&parts, opts.fill_count)
     }
 }
 

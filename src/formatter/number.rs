@@ -400,6 +400,7 @@ pub(crate) fn format_simple_with_placeholders(
 
 /// Analysis of a format section's numeric structure.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct FormatAnalysis {
     /// Number of integer digit placeholders
     pub integer_placeholders: Vec<DigitPlaceholder>,
@@ -423,6 +424,7 @@ pub struct FormatAnalysis {
     pub suffix_parts: Vec<FormatPart>,
 }
 
+#[allow(dead_code)]
 impl FormatAnalysis {
     /// Get the number of required decimal places
     pub fn decimal_places(&self) -> usize {
@@ -440,6 +442,7 @@ impl FormatAnalysis {
 }
 
 /// Analyze a format section to extract its numeric structure.
+#[allow(dead_code)]
 pub fn analyze_format(section: &Section) -> FormatAnalysis {
     let mut integer_placeholders = Vec::new();
     let mut decimal_placeholders = Vec::new();
@@ -612,6 +615,7 @@ pub fn analyze_format(section: &Section) -> FormatAnalysis {
 }
 
 /// Format a number according to a section.
+#[allow(dead_code)]
 pub fn format_number(
     value: f64,
     section: &Section,
@@ -757,6 +761,7 @@ pub fn format_number(
 /// Format an integer value using integer-only arithmetic (no precision loss).
 /// Based on SSF's bits/66_numint.js.
 /// This path is used for values that are exact integers within safe range (< 2^53).
+#[allow(dead_code)]
 fn format_number_as_integer(
     value: i64,
     section: &Section,
@@ -818,6 +823,7 @@ fn format_number_as_integer(
 }
 
 /// Format a number according to the analysis.
+#[allow(dead_code)]
 fn format_with_placeholders(value: f64, analysis: &FormatAnalysis, opts: &FormatOptions) -> String {
     let decimal_places = analysis.decimal_places();
 
@@ -852,6 +858,7 @@ fn format_with_placeholders(value: f64, analysis: &FormatAnalysis, opts: &Format
 }
 
 /// Format the integer part with placeholders and thousands separator.
+#[allow(dead_code)]
 fn format_integer(
     value: u64,
     placeholders: &[DigitPlaceholder],
@@ -977,6 +984,7 @@ fn format_integer(
 }
 
 /// Format the decimal part with placeholders.
+#[allow(dead_code)]
 fn format_decimal(
     value: f64,
     placeholders: &[DigitPlaceholder],
@@ -1073,6 +1081,7 @@ fn format_decimal(
 }
 
 /// Calculate the exact character count for format parts (prefix/suffix).
+#[allow(dead_code)]
 fn count_part_chars(parts: &[FormatPart]) -> usize {
     parts
         .iter()
@@ -1086,6 +1095,7 @@ fn count_part_chars(parts: &[FormatPart]) -> usize {
 }
 
 /// Build the final result string with prefix and suffix parts.
+#[allow(dead_code)]
 fn build_result(
     analysis: &FormatAnalysis,
     formatted_number: &str,
@@ -1132,6 +1142,7 @@ fn build_result(
 }
 
 /// Format a number in scientific notation according to a format section.
+#[allow(dead_code)]
 fn format_scientific(
     value: f64,
     section: &Section,

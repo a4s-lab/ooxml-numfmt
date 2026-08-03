@@ -41,4 +41,11 @@ pub enum FormatError {
 
     #[error("invalid serial number: {value}")]
     InvalidSerialNumber { value: f64 },
+
+    /// The requested layout cannot fit in a Rust string.
+    #[error("formatted output is too large for fill count {fill_count}")]
+    OutputTooLarge {
+        /// Fill repetition count that caused the output-size failure.
+        fill_count: usize,
+    },
 }

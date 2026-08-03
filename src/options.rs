@@ -29,4 +29,8 @@ pub struct FormatOptions {
     pub date_system: DateSystem,
     /// The locale for formatting.
     pub locale: Locale,
+    /// Exact repetition count for the effective `*x` fill directive.
+    ///
+    /// This is a character count supplied by the caller, not a target width.
+    pub fill_count: usize,
 }
