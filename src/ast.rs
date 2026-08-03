@@ -345,6 +345,63 @@ impl Default for SectionMetadata {
     }
 }
 
+impl SectionMetadata {
+    /// Derive section metadata from normalized syntax parts.
+    fn from_parts(parts: &[FormatPart]) -> Self {
+        let mut metadata = Self::default();
+
+        for part in parts {
+            match part {
+                FormatPart::AmPm(_) => metadata.has_ampm = true,
+                FormatPart::DatePart(DatePart::BuddhistYear4Alt | DatePart::BuddhistYear2Alt) => {
+                    metadata.is_hijri = true
+                }
+                FormatPart::DatePart(DatePart::SubSecond(precision)) => {
+                    metadata.max_subsecond_precision = Some(
+                        metadata
+                            .max_subsecond_precision
+                            .unwrap_or(0)
+                            .max(*precision),
+                    );
+                    metadata.smallest_time_unit = TimeUnit::Subseconds;
+                }
+                FormatPart::DatePart(DatePart::Second | DatePart::Second2) => {
+                    metadata.smallest_time_unit =
+                        metadata.smallest_time_unit.max(TimeUnit::Seconds);
+                }
+                FormatPart::DatePart(DatePart::Minute | DatePart::Minute2) => {
+                    metadata.smallest_time_unit =
+                        metadata.smallest_time_unit.max(TimeUnit::Minutes);
+                }
+                FormatPart::DatePart(DatePart::Hour | DatePart::Hour2) => {
+                    metadata.smallest_time_unit = metadata.smallest_time_unit.max(TimeUnit::Hours);
+                }
+                FormatPart::Elapsed(_) => metadata.has_elapsed_time = true,
+                FormatPart::Fraction { .. } => metadata.format_type = FormatType::Fraction,
+                FormatPart::TextPlaceholder => metadata.format_type = FormatType::Text,
+                _ => {}
+            }
+        }
+
+        if metadata.format_type == FormatType::General {
+            let has_date = parts
+                .iter()
+                .any(|part| matches!(part, FormatPart::DatePart(_)));
+            let has_number = parts
+                .iter()
+                .any(|part| matches!(part, FormatPart::Digit(_) | FormatPart::DecimalPoint));
+
+            if has_date || metadata.has_ampm || metadata.has_elapsed_time {
+                metadata.format_type = FormatType::DateTime;
+            } else if has_number {
+                metadata.format_type = FormatType::Number;
+            }
+        }
+
+        metadata
+    }
+}
+
 /// A single section of a format code.
 ///
 /// Format codes can have up to 4 sections:
@@ -355,31 +412,59 @@ impl Default for SectionMetadata {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Section {
     /// Optional condition for this section (e.g., `[>100]`)
-    pub condition: Option<Condition>,
+    condition: Option<Condition>,
     /// Optional color for this section (e.g., `[Red]`)
-    pub color: Option<Color>,
+    color: Option<Color>,
     /// The format parts that make up this section
-    pub parts: Vec<FormatPart>,
+    parts: Vec<FormatPart>,
     /// Pre-computed metadata to avoid repeated scanning
-    pub metadata: SectionMetadata,
+    pub(crate) metadata: SectionMetadata,
 }
 
 impl Section {
+    /// Create a section from optional selectors and normalized syntax parts.
+    pub fn new(condition: Option<Condition>, color: Option<Color>, parts: Vec<FormatPart>) -> Self {
+        let metadata = SectionMetadata::from_parts(&parts);
+        Self {
+            condition,
+            color,
+            parts,
+            metadata,
+        }
+    }
+
+    /// Return this section's optional selection condition.
+    pub fn condition(&self) -> Option<Condition> {
+        self.condition
+    }
+
+    /// Return this section's optional display color.
+    pub fn color(&self) -> Option<Color> {
+        self.color
+    }
+
+    /// Return the normalized syntax parts in source-relative order.
+    pub fn parts(&self) -> &[FormatPart] {
+        &self.parts
+    }
+
     /// Returns true if this section contains any date/time parts.
     pub fn has_date_parts(&self) -> bool {
-        self.parts.iter().any(|p| p.is_date_part())
+        self.parts().iter().any(|p| p.is_date_part())
     }
 
     /// Returns true if this section contains a text placeholder.
     pub fn has_text_placeholder(&self) -> bool {
-        self.parts
+        self.parts()
             .iter()
             .any(|p| matches!(p, FormatPart::TextPlaceholder))
     }
 
     /// Returns true if this section contains a percent sign.
     pub fn has_percent(&self) -> bool {
-        self.parts.iter().any(|p| matches!(p, FormatPart::Percent))
+        self.parts()
+            .iter()
+            .any(|p| matches!(p, FormatPart::Percent))
     }
 }
 
@@ -426,12 +511,12 @@ impl NumberFormat {
 
     /// Returns true if any section has a color.
     pub fn has_color(&self) -> bool {
-        self.sections.iter().any(|s| s.color.is_some())
+        self.sections.iter().any(|s| s.color().is_some())
     }
 
     /// Returns true if any section has a condition.
     pub fn has_condition(&self) -> bool {
-        self.sections.iter().any(|s| s.condition.is_some())
+        self.sections.iter().any(|s| s.condition().is_some())
     }
 
     /// Parse a format code string into a NumberFormat.

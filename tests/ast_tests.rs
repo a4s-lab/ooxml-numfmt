@@ -1,4 +1,6 @@
-use ooxml_numfmt::ast::{Condition, DatePart, DigitPlaceholder, FormatPart, NamedColor, Section};
+use ooxml_numfmt::ast::{
+    Color, Condition, DatePart, DigitPlaceholder, FormatPart, NamedColor, Section,
+};
 use ooxml_numfmt::NumberFormat;
 
 #[test]
@@ -35,31 +37,35 @@ fn test_format_part_is_date_part() {
 #[test]
 fn test_number_format_is_date_format() {
     // A format with date parts should be detected as date format
-    let section = Section {
-        condition: None,
-        color: None,
-        parts: vec![
+    let section = Section::new(
+        None,
+        None,
+        vec![
             FormatPart::DatePart(DatePart::Year4),
             FormatPart::Literal("-".into()),
             FormatPart::DatePart(DatePart::Month2),
         ],
-        metadata: ooxml_numfmt::ast::SectionMetadata::default(),
-    };
+    );
     let format = NumberFormat::from_sections(vec![section]);
     assert!(format.is_date_format());
 }
 
 #[test]
 fn test_number_format_sections_limit() {
-    let sections: Vec<Section> = (0..5)
-        .map(|_| Section {
-            condition: None,
-            color: None,
-            parts: vec![],
-            metadata: ooxml_numfmt::ast::SectionMetadata::default(),
-        })
-        .collect();
+    let sections: Vec<Section> = (0..5).map(|_| Section::new(None, None, vec![])).collect();
     // Should only keep first 4 sections
     let format = NumberFormat::from_sections(sections);
     assert_eq!(format.sections().len(), 4);
+}
+
+#[test]
+fn test_section_accessors_expose_immutable_syntax() {
+    let condition = Condition::GreaterThan(10.0);
+    let color = Color::Named(NamedColor::Red);
+    let parts = vec![FormatPart::Digit(DigitPlaceholder::Zero)];
+    let section = Section::new(Some(condition), Some(color), parts.clone());
+
+    assert_eq!(section.condition(), Some(condition));
+    assert_eq!(section.color(), Some(color));
+    assert_eq!(section.parts(), parts);
 }

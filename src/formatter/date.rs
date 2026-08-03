@@ -25,7 +25,7 @@ pub fn format_date(
 
     // Check if there are multiple SubSecond parts (still need to scan for this specific case)
     let has_multiple_subseconds = section
-        .parts
+        .parts()
         .iter()
         .filter(|p| matches!(p, FormatPart::DatePart(DatePart::SubSecond(_))))
         .count()
@@ -112,7 +112,7 @@ pub fn format_date(
     // Build the formatted string
     let mut result = String::new();
 
-    for part in &section.parts {
+    for part in section.parts() {
         match part {
             FormatPart::DatePart(date_part) => {
                 let formatted = format_date_part(

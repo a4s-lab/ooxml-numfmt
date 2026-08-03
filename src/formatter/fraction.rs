@@ -18,7 +18,7 @@ pub fn format_fraction(
     _opts: &FormatOptions,
 ) -> Result<String, FormatError> {
     // Find the fraction part in the section
-    let fraction_part = section.parts.iter().find_map(|p| {
+    let fraction_part = section.parts().iter().find_map(|p| {
         if let FormatPart::Fraction {
             integer_digits,
             numerator_digits,

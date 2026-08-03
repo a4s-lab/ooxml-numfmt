@@ -39,12 +39,7 @@ pub fn parse(format_code: &str) -> Result<NumberFormat, ParseError> {
 
     if let Some(color) = general_check {
         // Create an empty section that will trigger fallback formatting
-        let general_section = Section {
-            condition: None,
-            color,
-            parts: Vec::new(),
-            metadata: crate::ast::SectionMetadata::default(),
-        };
+        let general_section = Section::new(None, color, Vec::new());
         return Ok(NumberFormat::from_sections(vec![general_section]));
     }
 
@@ -618,8 +613,10 @@ impl SectionBuilder {
         }
     }
 
+    /// Add a normalized part, replacing any earlier fill directive.
     fn add_part(&mut self, part: FormatPart) {
-        // `Fill` parts replace any existing `Fill` parts, keeping only the last one
+        // The semantic AST retains at most one fill. A later directive replaces
+        // the earlier node while preserving the later directive's position.
         if matches!(&part, FormatPart::Fill(_)) {
             self.parts
                 .retain(|part| !matches!(part, FormatPart::Fill(_)));
@@ -634,99 +631,7 @@ impl SectionBuilder {
         // Post-process to detect subsecond patterns in date formats
         self.detect_subseconds();
 
-        // Compute metadata by scanning the parts once
-        let metadata = self.compute_metadata();
-
-        Section {
-            condition: self.condition,
-            color: self.color,
-            parts: self.parts,
-            metadata,
-        }
-    }
-
-    /// Compute section metadata by scanning parts once
-    /// Based on SSF's eval_fmt in bits/82_eval.js
-    fn compute_metadata(&self) -> crate::ast::SectionMetadata {
-        use crate::ast::*;
-
-        let mut has_ampm = false;
-        let mut is_hijri = false;
-        let mut max_subsecond_precision = None;
-        let mut has_elapsed_time = false;
-        let mut smallest_time_unit = TimeUnit::None;
-        let mut format_type = FormatType::General;
-
-        // Scan parts to gather metadata
-        for part in &self.parts {
-            match part {
-                FormatPart::AmPm(_) => {
-                    has_ampm = true;
-                }
-                FormatPart::DatePart(DatePart::BuddhistYear4Alt | DatePart::BuddhistYear2Alt) => {
-                    is_hijri = true;
-                }
-                FormatPart::DatePart(DatePart::SubSecond(precision)) => {
-                    max_subsecond_precision =
-                        Some(max_subsecond_precision.unwrap_or(0).max(*precision));
-                    if smallest_time_unit < TimeUnit::Subseconds {
-                        smallest_time_unit = TimeUnit::Subseconds;
-                    }
-                }
-                FormatPart::DatePart(DatePart::Second | DatePart::Second2) => {
-                    if smallest_time_unit < TimeUnit::Seconds {
-                        smallest_time_unit = TimeUnit::Seconds;
-                    }
-                }
-                FormatPart::DatePart(DatePart::Minute | DatePart::Minute2) => {
-                    if smallest_time_unit < TimeUnit::Minutes {
-                        smallest_time_unit = TimeUnit::Minutes;
-                    }
-                }
-                FormatPart::DatePart(DatePart::Hour | DatePart::Hour2) => {
-                    if smallest_time_unit < TimeUnit::Hours {
-                        smallest_time_unit = TimeUnit::Hours;
-                    }
-                }
-                FormatPart::Elapsed(_) => {
-                    has_elapsed_time = true;
-                }
-                FormatPart::Fraction { .. } => {
-                    format_type = FormatType::Fraction;
-                }
-                FormatPart::TextPlaceholder => {
-                    format_type = FormatType::Text;
-                }
-                _ => {}
-            }
-        }
-
-        // Determine format type if not already set
-        if format_type == FormatType::General {
-            let has_date = self
-                .parts
-                .iter()
-                .any(|p| matches!(p, FormatPart::DatePart(_)));
-            let has_number = self
-                .parts
-                .iter()
-                .any(|p| matches!(p, FormatPart::Digit(_) | FormatPart::DecimalPoint));
-
-            if has_date || has_ampm || has_elapsed_time {
-                format_type = FormatType::DateTime;
-            } else if has_number {
-                format_type = FormatType::Number;
-            }
-        }
-
-        SectionMetadata {
-            has_ampm,
-            is_hijri,
-            max_subsecond_precision,
-            has_elapsed_time,
-            smallest_time_unit,
-            format_type,
-        }
+        Section::new(self.condition, self.color, self.parts)
     }
 
     /// Detect and merge fraction patterns in the parts list.
@@ -1202,7 +1107,7 @@ mod tests {
     fn test_parse_single_zero() {
         let fmt = parse("0").unwrap();
         assert_eq!(fmt.sections().len(), 1);
-        assert_eq!(fmt.sections()[0].parts.len(), 1);
+        assert_eq!(fmt.sections()[0].parts().len(), 1);
     }
 
     #[test]

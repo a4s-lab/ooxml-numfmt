@@ -54,16 +54,16 @@ impl NumberFormat {
 
         // Excel behavior: when a conditional section strictly matches, format using absolute value
         // Use absolute value only when the condition is strictly satisfied (not at boundary)
-        let has_conditions = sections.iter().any(|s| s.condition.is_some());
+        let has_conditions = sections.iter().any(|s| s.condition().is_some());
         let use_abs_value = has_conditions
-            && section.condition.is_some()
-            && section.condition.unwrap().is_strict_match(value);
+            && section.condition().is_some()
+            && section.condition().unwrap().is_strict_match(value);
         let format_value = if use_abs_value { value.abs() } else { value };
 
         // Handle "General" format (empty section with no parts)
         // This uses fallback formatting which matches Excel's General behavior
         // Note: sections can have conditions or colors and still be General format
-        if section.parts.is_empty() {
+        if section.parts().is_empty() {
             // Special case: if this is a strict conditional match, Excel truncates decimals
             // This handles formats like "[<-25]General" which show "50" instead of "50.1"
             let truncated_value = if use_abs_value && format_value.fract() != 0.0 {
@@ -86,15 +86,15 @@ impl NumberFormat {
         // But NOT if we're using absolute value due to conditional matching
         // EXCEPTION: Fraction and scientific notation formats add their own minus sign
         let num_sections = sections.len();
-        let has_numeric_parts = section.parts.iter().any(|p| p.is_numeric_part());
-        let is_single_char_literal = section.parts.len() == 1
-            && matches!(&section.parts[0], FormatPart::Literal(s) if s.len() == 1);
+        let has_numeric_parts = section.parts().iter().any(|p| p.is_numeric_part());
+        let is_single_char_literal = section.parts().len() == 1
+            && matches!(&section.parts()[0], FormatPart::Literal(s) if s.len() == 1);
         let has_fraction = section
-            .parts
+            .parts()
             .iter()
             .any(|p| matches!(p, FormatPart::Fraction { .. }));
         let has_scientific = section
-            .parts
+            .parts()
             .iter()
             .any(|p| matches!(p, FormatPart::Scientific { .. }));
         let need_minus_sign = num_sections == 1
@@ -128,12 +128,12 @@ impl NumberFormat {
         let sections = self.sections();
 
         // Check if any section has conditions
-        let has_conditions = sections.iter().any(|s| s.condition.is_some());
+        let has_conditions = sections.iter().any(|s| s.condition().is_some());
 
         if has_conditions {
             // With conditions: find matching conditional, or first non-conditional
             for (index, section) in sections.iter().enumerate() {
-                if let Some(ref condition) = section.condition {
+                if let Some(condition) = section.condition() {
                     if condition.evaluate(value) {
                         return index;
                     }
@@ -166,7 +166,7 @@ impl NumberFormat {
                     // Zero value - use section[2]
                     // Unless it's text-only (@), then use positive section
                     if sections[2].has_text_placeholder()
-                        && !sections[2].parts.iter().any(|p| {
+                        && !sections[2].parts().iter().any(|p| {
                             p.is_numeric_part()
                                 || matches!(
                                     p,
@@ -189,7 +189,7 @@ impl NumberFormat {
         if let Some(text_section) = self.select_text_section() {
             let mut result = String::new();
 
-            for part in &text_section.parts {
+            for part in text_section.parts() {
                 match part {
                     FormatPart::TextPlaceholder => result.push_str(text),
                     FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => result.push_str(s),
@@ -270,7 +270,7 @@ impl NumberFormat {
         };
 
         // Handle "General" format (empty section with no parts)
-        if section.parts.is_empty() {
+        if section.parts().is_empty() {
             return Ok(bigint::fallback_format_bigint(value));
         }
 
@@ -287,7 +287,7 @@ impl NumberFormat {
 
         // Add minus sign for negative values in single-section formats
         let sections = self.sections();
-        let has_numeric_parts = section.parts.iter().any(|p| p.is_numeric_part());
+        let has_numeric_parts = section.parts().iter().any(|p| p.is_numeric_part());
         if sections.len() == 1 && is_negative && has_numeric_parts {
             result.insert(0, '-');
         }
@@ -424,12 +424,7 @@ mod tests {
     }
 
     fn make_section(parts: Vec<FormatPart>) -> Section {
-        Section {
-            condition: None,
-            color: None,
-            parts,
-            metadata: crate::ast::SectionMetadata::default(),
-        }
+        Section::new(None, None, parts)
     }
 
     #[test]
@@ -484,12 +479,11 @@ mod tests {
     #[test]
     fn test_select_section_with_condition() {
         let fmt = make_format(vec![
-            Section {
-                condition: Some(Condition::GreaterThan(100.0)),
-                color: None,
-                parts: vec![FormatPart::Literal("BIG".to_string())],
-                metadata: crate::ast::SectionMetadata::default(),
-            },
+            Section::new(
+                Some(Condition::GreaterThan(100.0)),
+                None,
+                vec![FormatPart::Literal("BIG".to_string())],
+            ),
             make_section(vec![FormatPart::Digit(DigitPlaceholder::Zero)]),
         ]);
 

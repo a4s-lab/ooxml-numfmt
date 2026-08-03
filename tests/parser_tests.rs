@@ -27,7 +27,10 @@ fn test_parse_multiple_sections() {
 fn test_parse_color() {
     let fmt = NumberFormat::parse("[Red]0").unwrap();
     assert!(fmt.has_color());
-    assert_eq!(fmt.sections()[0].color, Some(Color::Named(NamedColor::Red)));
+    assert_eq!(
+        fmt.sections()[0].color(),
+        Some(Color::Named(NamedColor::Red))
+    );
 }
 
 #[test]
@@ -54,12 +57,12 @@ fn test_parse_too_many_sections() {
 fn test_minute_vs_month_disambiguation() {
     // In "mm-dd" without hour, m is month
     let fmt = NumberFormat::parse("mm-dd").unwrap();
-    let parts = &fmt.sections()[0].parts;
+    let parts = fmt.sections()[0].parts();
     assert!(matches!(parts[0], FormatPart::DatePart(DatePart::Month2)));
 
     // In "hh:mm" with hour before, m is minute
     let fmt = NumberFormat::parse("hh:mm").unwrap();
-    let parts = &fmt.sections()[0].parts;
+    let parts = fmt.sections()[0].parts();
     // Find the minute part after the hour
     let has_minute = parts
         .iter()
@@ -75,7 +78,7 @@ fn test_fill_treats_date_tokens_as_literal_characters() {
         let format_code = format!("*{fill}");
         let fmt = NumberFormat::parse(&format_code).unwrap();
 
-        assert_eq!(fmt.sections()[0].parts, vec![FormatPart::Fill(fill)]);
+        assert_eq!(fmt.sections()[0].parts(), &[FormatPart::Fill(fill)]);
     }
 }
 
@@ -84,8 +87,8 @@ fn test_parse_multiple_fill_operators_keeps_only_last() {
     let fmt = NumberFormat::parse("*A0*B").unwrap();
 
     assert_eq!(
-        fmt.sections()[0].parts,
-        vec![
+        fmt.sections()[0].parts(),
+        &[
             FormatPart::Digit(DigitPlaceholder::Zero),
             FormatPart::Fill('B'),
         ]

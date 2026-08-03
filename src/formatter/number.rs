@@ -102,7 +102,7 @@ pub fn analyze_format(section: &Section) -> FormatAnalysis {
     // First, count trailing commas by scanning backwards from the end
     // Any ThousandsSeparator after the last Digit/DecimalPoint is a trailing comma
     let mut trailing_comma_count = 0;
-    for part in section.parts.iter().rev() {
+    for part in section.parts().iter().rev() {
         match part {
             FormatPart::ThousandsSeparator => {
                 trailing_comma_count += 1;
@@ -120,7 +120,7 @@ pub fn analyze_format(section: &Section) -> FormatAnalysis {
     // Track which commas are trailing (to exclude from has_thousands_separator)
     let mut commas_seen = 0;
     let total_commas = section
-        .parts
+        .parts()
         .iter()
         .filter(|p| matches!(p, FormatPart::ThousandsSeparator))
         .count();
@@ -130,7 +130,7 @@ pub fn analyze_format(section: &Section) -> FormatAnalysis {
     let mut after_decimal = false;
     let mut after_digits = false;
 
-    for part in &section.parts {
+    for part in section.parts() {
         match part {
             FormatPart::Digit(placeholder) => {
                 seen_digit = true;
@@ -267,7 +267,7 @@ pub fn format_number(
     opts: &FormatOptions,
 ) -> Result<String, FormatError> {
     // Check if this is scientific notation
-    let scientific_part = section.parts.iter().find_map(|p| {
+    let scientific_part = section.parts().iter().find_map(|p| {
         if let FormatPart::Scientific { upper, show_plus } = p {
             Some((*upper, *show_plus))
         } else {
@@ -295,14 +295,14 @@ pub fn format_number(
     // Check if section has any numeric placeholders
     let has_numeric_parts = section.metadata.format_type == FormatType::Number
         || section
-            .parts
+            .parts()
             .iter()
             .any(|p| matches!(p, FormatPart::Digit(_) | FormatPart::DecimalPoint));
 
     // If no numeric parts, check if GeneralNumber is present
     if !has_numeric_parts {
         let has_general_number = section
-            .parts
+            .parts()
             .iter()
             .any(|p| matches!(p, FormatPart::GeneralNumber));
 
@@ -310,7 +310,7 @@ pub fn format_number(
             // Section has GeneralNumber part - use General format + append literals
             // This handles cases like "General " where we want to format the number and add a suffix
             let mut result = crate::formatter::fallback_format(value);
-            for part in &section.parts {
+            for part in section.parts() {
                 match part {
                     FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => result.push_str(s),
                     FormatPart::Locale(locale_code) => {
@@ -333,7 +333,7 @@ pub fn format_number(
         } else {
             // No GeneralNumber - just return the literals without formatting the number
             let mut result = String::new();
-            for part in &section.parts {
+            for part in section.parts() {
                 match part {
                     FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => result.push_str(s),
                     FormatPart::Locale(locale_code) => {
@@ -791,7 +791,7 @@ fn format_scientific(
     let mut seen_decimal = false;
     let mut after_exponent = false;
 
-    for part in &section.parts {
+    for part in section.parts() {
         match part {
             FormatPart::Digit(_) if !seen_decimal && !after_exponent => {
                 mantissa_integer_places += 1;
@@ -891,12 +891,7 @@ mod tests {
     use crate::ast::Section;
 
     fn make_section(parts: Vec<FormatPart>) -> Section {
-        Section {
-            condition: None,
-            color: None,
-            parts,
-            metadata: crate::ast::SectionMetadata::default(),
-        }
+        Section::new(None, None, parts)
     }
 
     #[test]
