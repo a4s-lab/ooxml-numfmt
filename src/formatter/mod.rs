@@ -13,7 +13,7 @@ pub use number::format_number;
 
 #[cfg(feature = "bigint")]
 #[allow(unused_imports)]
-pub use bigint::{fallback_format_bigint, format_bigint, is_safe_integer};
+pub use bigint::{fallback_format_bigint, is_safe_integer};
 
 use crate::ast::{FormatPart, NumberFormat};
 use crate::compile::{Operation, SectionKind, SectionPlan};
@@ -288,48 +288,28 @@ impl NumberFormat {
 
         // For large integers, use string-based formatting
         let is_negative = value.sign() == Sign::Minus;
-        let section = if is_negative {
-            // Select negative section if available
-            let sections = self.sections();
-            if sections.len() >= 2 {
-                &sections[1]
-            } else {
-                &sections[0]
-            }
+        let section_index = if is_negative && self.sections().len() >= 2 {
+            1
         } else {
-            &self.sections()[0]
+            0
         };
+        let section = &self.sections()[section_index];
+        let plan = &self.compiled.sections[section_index];
 
         // Handle "General" format (empty section with no parts)
         if section.parts().is_empty() {
             return Ok(bigint::fallback_format_bigint(value));
         }
 
-        // Check if this is a date format - BigInt can't be used for dates
-        if section.has_date_parts() {
-            return Err(FormatError::TypeMismatch {
-                expected: "numeric format",
-                got: "date format with BigInt value",
-            });
-        }
-
-        // Format using BigInt-specific logic
-        let section_index = if is_negative && self.sections().len() >= 2 {
-            1
-        } else {
-            0
-        };
-        let mut result =
-            bigint::format_bigint(value, section, &self.compiled.sections[section_index], opts)?;
+        let mut parts = bigint::evaluate_bigint(value, plan, opts)?;
 
         // Add minus sign for negative values in single-section formats
         let sections = self.sections();
-        let has_numeric_parts = section.parts().iter().any(|p| p.is_numeric_part());
-        if sections.len() == 1 && is_negative && has_numeric_parts {
-            result.insert(0, '-');
+        if sections.len() == 1 && is_negative && plan.kind == SectionKind::Number {
+            parts.insert(0, render::RenderPart::Text("-".to_string()));
         }
 
-        Ok(result)
+        render::resolve_layout(&parts, 0)
     }
 }
 

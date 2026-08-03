@@ -216,6 +216,17 @@ fn prepare_integer_fields(
     opts: &FormatOptions,
     fields: &mut [Option<String>],
 ) {
+    let value_digits: Vec<char> = value.to_string().chars().collect();
+    prepare_integer_digit_fields(&value_digits, spec, opts, fields);
+}
+
+/// Map an arbitrary-length integer digit slice to compiled placeholders.
+fn prepare_integer_digit_fields(
+    value_digits: &[char],
+    spec: &NumberSpec,
+    opts: &FormatOptions,
+    fields: &mut [Option<String>],
+) {
     let placeholders = &spec.integer_placeholders;
     if placeholders.is_empty() {
         return;
@@ -225,11 +236,10 @@ fn prepare_integer_fields(
         .iter()
         .filter(|field| field.placeholder.is_required())
         .count();
-    if value == 0 && minimum_digits == 0 {
+    if value_digits.iter().all(|character| *character == '0') && minimum_digits == 0 {
         return;
     }
 
-    let value_digits: Vec<char> = value.to_string().chars().collect();
     let output_len = if spec.use_thousands {
         value_digits.len().max(minimum_digits)
     } else {
@@ -261,6 +271,37 @@ fn prepare_integer_fields(
             output.push(opts.locale.thousands_separator);
         }
     }
+}
+
+/// Evaluate exact arbitrary-length integer digits through a compiled number plan.
+#[cfg(feature = "bigint")]
+pub(super) fn evaluate_integer_digits(
+    digits: &str,
+    plan: &SectionPlan,
+    opts: &FormatOptions,
+) -> Result<Vec<RenderPart>, FormatError> {
+    let spec = plan.number.as_ref().ok_or(FormatError::TypeMismatch {
+        expected: "compiled number format",
+        got: "non-number section",
+    })?;
+    let mut fields = vec![None; plan.operations.len()];
+    let value_digits: Vec<char> = digits.chars().collect();
+    prepare_integer_digit_fields(&value_digits, spec, opts, &mut fields);
+    prepare_decimal_fields(0.0, spec, &mut fields);
+    if let Some(operation_index) = spec.decimal_point_index {
+        fields[operation_index] = Some(opts.locale.decimal_separator.to_string());
+    }
+
+    Ok(super::evaluate_operations(
+        plan,
+        |operation_index, part| match part {
+            FormatPart::Digit(_) | FormatPart::DecimalPoint => fields[operation_index].clone(),
+            FormatPart::ThousandsSeparator => None,
+            FormatPart::Percent => Some("%".to_string()),
+            FormatPart::Locale(locale) => locale.currency.clone(),
+            _ => None,
+        },
+    ))
 }
 
 /// Map rounded fractional digits and optional padding to decimal placeholders.
