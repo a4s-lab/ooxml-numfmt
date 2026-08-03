@@ -304,8 +304,26 @@ pub struct Section {
 }
 
 impl Section {
-    /// Create a section from optional selectors and normalized syntax parts.
-    pub fn new(condition: Option<Condition>, color: Option<Color>, parts: Vec<FormatPart>) -> Self {
+    /// Create a section from optional selectors and semantic syntax parts.
+    ///
+    /// When multiple fill directives are supplied, only the final directive is
+    /// retained at its original position, matching parser normalization.
+    pub fn new(
+        condition: Option<Condition>,
+        color: Option<Color>,
+        mut parts: Vec<FormatPart>,
+    ) -> Self {
+        if let Some(final_fill_index) = parts
+            .iter()
+            .rposition(|part| matches!(part, FormatPart::Fill(_)))
+        {
+            let mut index = 0;
+            parts.retain(|part| {
+                let retain = !matches!(part, FormatPart::Fill(_)) || index == final_fill_index;
+                index += 1;
+                retain
+            });
+        }
         Self {
             condition,
             color,

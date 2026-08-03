@@ -69,3 +69,26 @@ fn test_section_accessors_expose_immutable_syntax() {
     assert_eq!(section.color(), Some(color));
     assert_eq!(section.parts(), parts);
 }
+
+#[test]
+fn test_section_constructor_normalizes_multiple_fills() {
+    let section = Section::new(
+        None,
+        None,
+        vec![
+            FormatPart::Fill('a'),
+            FormatPart::Digit(DigitPlaceholder::Zero),
+            FormatPart::Fill('b'),
+            FormatPart::Digit(DigitPlaceholder::Zero),
+        ],
+    );
+
+    assert_eq!(
+        section.parts(),
+        &[
+            FormatPart::Digit(DigitPlaceholder::Zero),
+            FormatPart::Fill('b'),
+            FormatPart::Digit(DigitPlaceholder::Zero),
+        ]
+    );
+}

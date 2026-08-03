@@ -42,6 +42,10 @@
 //! - `mm` - Two-digit minute (after hour)
 //! - `ss` - Two-digit second
 //!
+//! ### Fill Directives
+//! - `*x` - Repeat `x` exactly `FormatOptions::fill_count` times
+//! - `_x` - Emit one plain-text space as a width approximation
+//!
 //! ## Feature Flags
 //!
 //! - `chrono` (default) - Enable chrono type support

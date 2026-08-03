@@ -411,7 +411,7 @@ impl<'a> Parser<'a> {
         Ok(builder.build())
     }
 
-    /// Parse bracket content: [Red], [>100], [h], [$-409], etc.
+    /// Parse bracket content such as `[Red]`, `[>100]`, `[h]`, or `[$-409]`.
     fn parse_bracket_content(
         &mut self,
         builder: &mut SectionBuilder,
@@ -642,7 +642,7 @@ impl SectionBuilder {
     }
 
     /// Detect and merge fraction patterns in the parts list.
-    /// Looks for patterns like: [digits] "/" [digits] and converts to Fraction
+    /// Convert patterns like `[digits] / [digits]` into a fraction node.
     fn detect_fractions(&mut self) {
         let mut new_parts = Vec::new();
         let mut i = 0;
