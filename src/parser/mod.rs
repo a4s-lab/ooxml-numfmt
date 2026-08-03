@@ -117,7 +117,9 @@ impl<'a> Parser<'a> {
                 Token::General => {
                     self.advance()?;
                     // Check if there are more format parts after "General"
-                    if matches!(self.current.token, Token::Eof | Token::SectionSep) {
+                    if matches!(self.current.token, Token::Eof | Token::SectionSep)
+                        && builder.is_empty()
+                    {
                         // Truly just "General" - return empty section for fallback formatting
                         break;
                     } else {
@@ -611,6 +613,11 @@ impl SectionBuilder {
             color: None,
             parts: Vec::new(),
         }
+    }
+
+    /// Return whether this section has no normalized syntax parts yet.
+    fn is_empty(&self) -> bool {
+        self.parts.is_empty()
     }
 
     /// Add a normalized part, replacing any earlier fill directive.

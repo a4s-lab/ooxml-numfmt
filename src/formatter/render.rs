@@ -1,0 +1,100 @@
+//! Final materialization of unresolved semantic and layout output.
+
+use crate::error::FormatError;
+
+/// One evaluated output fragment before layout directives are resolved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RenderPart {
+    /// Materialized semantic or literal text.
+    Text(String),
+    /// A fill directive awaiting its runtime repetition count.
+    Fill(char),
+    /// A width hint represented as one plain-text space.
+    Skip(char),
+}
+
+/// Append text while coalescing adjacent materialized fragments.
+pub(crate) fn push_text(parts: &mut Vec<RenderPart>, text: impl Into<String>) {
+    let text = text.into();
+    if text.is_empty() {
+        return;
+    }
+
+    if let Some(RenderPart::Text(previous)) = parts.last_mut() {
+        previous.push_str(&text);
+    } else {
+        parts.push(RenderPart::Text(text));
+    }
+}
+
+/// Resolve every layout directive into one plain-text string.
+pub(crate) fn resolve_layout(
+    parts: &[RenderPart],
+    fill_count: usize,
+) -> Result<String, FormatError> {
+    let mut output = String::new();
+
+    for part in parts {
+        match part {
+            RenderPart::Text(text) => output.push_str(text),
+            RenderPart::Fill(character) => {
+                output.extend(std::iter::repeat_n(*character, fill_count));
+            }
+            RenderPart::Skip(_) => output.push(' '),
+        }
+    }
+
+    Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_empty_and_text_only_parts() {
+        assert_eq!(resolve_layout(&[], 4).unwrap(), "");
+        assert_eq!(
+            resolve_layout(&[RenderPart::Text("text".to_string())], 4).unwrap(),
+            "text"
+        );
+    }
+
+    #[test]
+    fn resolves_fill_at_every_layout_position() {
+        let parts = [
+            RenderPart::Fill('-'),
+            RenderPart::Text("a".to_string()),
+            RenderPart::Fill('é'),
+            RenderPart::Text("b".to_string()),
+            RenderPart::Fill('!'),
+        ];
+
+        assert_eq!(resolve_layout(&parts, 0).unwrap(), "ab");
+        assert_eq!(resolve_layout(&parts, 1).unwrap(), "-aéb!");
+        assert_eq!(resolve_layout(&parts, 3).unwrap(), "---aéééb!!!");
+    }
+
+    #[test]
+    fn resolves_skip_as_one_ascii_space() {
+        assert_eq!(resolve_layout(&[RenderPart::Skip(')')], 0).unwrap(), " ");
+    }
+
+    #[test]
+    fn coalesces_adjacent_text_without_crossing_layout_boundaries() {
+        let mut parts = Vec::new();
+        push_text(&mut parts, "a");
+        push_text(&mut parts, "b");
+        parts.push(RenderPart::Fill('.'));
+        push_text(&mut parts, "c");
+
+        assert_eq!(
+            parts,
+            vec![
+                RenderPart::Text("ab".to_string()),
+                RenderPart::Fill('.'),
+                RenderPart::Text("c".to_string()),
+            ]
+        );
+    }
+}

@@ -1,23 +1,24 @@
 //! Date and time formatting
 
-use crate::ast::{AmPmStyle, DatePart, ElapsedPart, FormatPart, Section};
-use crate::compile::{SectionPlan, TimeUnit};
+use crate::ast::{AmPmStyle, DatePart, ElapsedPart, FormatPart};
+use crate::compile::{Operation, SectionPlan, TimeUnit};
 use crate::date_serial::{serial_to_date, serial_to_weekday};
 use crate::error::FormatError;
 use crate::locale::Locale;
 use crate::options::FormatOptions;
 
-/// Format a value as a date/time using the given section.
-pub fn format_date(
+use super::render::RenderPart;
+
+/// Evaluate a value as date/time fragments without resolving layout.
+pub(super) fn evaluate_date(
     value: f64,
-    section: &Section,
     plan: &SectionPlan,
     opts: &FormatOptions,
-) -> Result<String, FormatError> {
+) -> Result<Vec<RenderPart>, FormatError> {
     // SSF returns empty string for out-of-range dates (< 0 or > 2958465)
     // This matches Excel's behavior - see bits/35_datecode.js line 2
     if !(0.0..=2958465.0).contains(&value) {
-        return Ok(String::new());
+        return Ok(Vec::new());
     }
 
     // Date properties are compiled once instead of rescanned for every value.
@@ -25,10 +26,15 @@ pub fn format_date(
     let has_ampm = plan.date.has_ampm;
 
     // Check if there are multiple SubSecond parts (still need to scan for this specific case)
-    let has_multiple_subseconds = section
-        .parts()
+    let has_multiple_subseconds = plan
+        .operations
         .iter()
-        .filter(|p| matches!(p, FormatPart::DatePart(DatePart::SubSecond(_))))
+        .filter(|operation| {
+            matches!(
+                operation,
+                Operation::Semantic(FormatPart::DatePart(DatePart::SubSecond(_)))
+            )
+        })
         .count()
         > 1;
 
@@ -110,63 +116,29 @@ pub fn format_date(
     // Even for value 0, Excel calculates it as Saturday (day before Jan 1, 1900)
     let weekday = serial_to_weekday(value, opts.date_system);
 
-    // Build the formatted string
-    let mut result = String::new();
-
-    for part in section.parts() {
-        match part {
-            FormatPart::DatePart(date_part) => {
-                let formatted = format_date_part(
-                    *date_part,
-                    year,
-                    month,
-                    day,
-                    hour,
-                    minute,
-                    second,
-                    weekday,
-                    has_ampm,
-                    value, // Pass the original serial value for fractional seconds
-                    has_multiple_subseconds,
-                    &opts.locale,
-                );
-                result.push_str(&formatted);
-            }
-            FormatPart::AmPm(style) => {
-                let formatted = format_ampm(*style, hour, &opts.locale);
-                result.push_str(&formatted);
-            }
-            FormatPart::Elapsed(elapsed_part) => {
-                let formatted = format_elapsed(*elapsed_part, adjusted_value);
-                result.push_str(&formatted);
-            }
-            FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => {
-                result.push_str(s);
-            }
-            FormatPart::Skip(c) => {
-                // Skip width of character - add a space for alignment
-                result.push(*c);
-            }
-            FormatPart::Fill(_) => {
-                // Fill characters are handled at a higher level
-                // For now, just skip
-            }
-            FormatPart::ThousandsSeparator => {
-                // In date formats, the thousands separator (,) is just a literal comma
-                result.push(opts.locale.thousands_separator);
-            }
-            FormatPart::DecimalPoint => {
-                // In date formats, the decimal point is just a literal
-                result.push(opts.locale.decimal_separator);
-            }
-            _ => {
-                // Other parts (e.g., numeric) are not expected in date formats
-                // but we'll ignore them silently
-            }
-        }
-    }
-
-    Ok(result)
+    // Evaluate semantic fields while the common executor retains layout operations.
+    Ok(super::evaluate_operations(plan, |part| match part {
+        FormatPart::DatePart(date_part) => Some(format_date_part(
+            *date_part,
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+            weekday,
+            has_ampm,
+            value, // Pass the original serial value for fractional seconds
+            has_multiple_subseconds,
+            &opts.locale,
+        )),
+        FormatPart::AmPm(style) => Some(format_ampm(*style, hour, &opts.locale)),
+        FormatPart::Elapsed(elapsed_part) => Some(format_elapsed(*elapsed_part, adjusted_value)),
+        // In date formats separators remain locale-aware literal characters.
+        FormatPart::ThousandsSeparator => Some(opts.locale.thousands_separator.to_string()),
+        FormatPart::DecimalPoint => Some(opts.locale.decimal_separator.to_string()),
+        _ => None,
+    }))
 }
 
 /// Format a single date/time part.

@@ -3,6 +3,7 @@
 mod date;
 mod fraction;
 mod number;
+mod render;
 mod text;
 
 #[cfg(feature = "bigint")]
@@ -14,8 +15,8 @@ pub use number::format_number;
 #[allow(unused_imports)]
 pub use bigint::{fallback_format_bigint, format_bigint, is_safe_integer};
 
-use crate::ast::{FormatPart, NumberFormat, Section};
-use crate::compile::SectionKind;
+use crate::ast::{FormatPart, NumberFormat};
+use crate::compile::{Operation, SectionKind, SectionPlan};
 use crate::error::FormatError;
 use crate::options::FormatOptions;
 
@@ -78,12 +79,16 @@ impl NumberFormat {
             } else {
                 format_value
             };
-            return Ok(fallback_format(truncated_value));
+            return render::resolve_layout(
+                &[render::RenderPart::Text(fallback_format(truncated_value))],
+                0,
+            );
         }
 
         // Check if this is a date format
         if plan.kind == SectionKind::DateTime {
-            return date::format_date(format_value, section, plan, opts);
+            let parts = date::evaluate_date(format_value, plan, opts)?;
+            return render::resolve_layout(&parts, 0);
         }
 
         // Determine if we need to add a minus sign
@@ -111,17 +116,26 @@ impl NumberFormat {
             && !has_fraction
             && !has_scientific;
 
-        // Format as a number
-        let mut result = format_number(format_value, section, plan, opts)?;
+        if matches!(plan.kind, SectionKind::General | SectionKind::Literal) {
+            let mut parts = evaluate_simple_number(plan, format_value);
+            if need_minus_sign {
+                parts.insert(0, render::RenderPart::Text("-".to_string()));
+            }
+            return render::resolve_layout(&parts, 0);
+        }
+
+        // Format paths not yet migrated emit one semantic text fragment.
+        let result = format_number(format_value, section, plan, opts)?;
+        let mut parts = vec![render::RenderPart::Text(result)];
 
         // Add minus sign for single-section formats with negative values
         // Note: format_number uses abs(value), so it never includes the minus sign
         // Exception: Fraction and scientific notation formats add their own minus sign
         if need_minus_sign {
-            result.insert(0, '-');
+            parts.insert(0, render::RenderPart::Text("-".to_string()));
         }
 
-        Ok(result)
+        render::resolve_layout(&parts, 0)
     }
 
     /// Return the index of the appropriate format section based on the value.
@@ -193,18 +207,9 @@ impl NumberFormat {
 
     /// Format a text value using this format code.
     pub fn format_text(&self, text: &str, _opts: &FormatOptions) -> String {
-        if let Some(text_section) = self.select_text_section() {
-            let mut result = String::new();
-
-            for part in text_section.parts() {
-                match part {
-                    FormatPart::TextPlaceholder => result.push_str(text),
-                    FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => result.push_str(s),
-                    _ => {}
-                }
-            }
-
-            result
+        if let Some(index) = self.select_text_section_index() {
+            let parts = text::evaluate_text(&self.compiled.sections[index], text);
+            render::resolve_layout(&parts, 0).unwrap_or_else(|_| text.to_string())
         } else {
             // Default: return text as-is
             text.to_string()
@@ -215,18 +220,19 @@ impl NumberFormat {
     /// - If the 4th section is present, always return it.
     /// - With fewer sections, use the final section only if it contains `@`.
     /// - Otherwise, return None.
-    fn select_text_section(&self) -> Option<&Section> {
+    fn select_text_section_index(&self) -> Option<usize> {
         let sections = self.sections();
 
         // Text section is the 4th section if present
         if sections.len() >= 4 {
-            return Some(&sections[3]);
+            return Some(3);
         }
 
         // With fewer sections, the final section is the text section only if it contains `@`.
         sections
             .last()
             .filter(|section| section.has_text_placeholder())
+            .map(|_| sections.len() - 1)
     }
 
     /// Format a BigInt value using this format code (requires `bigint` feature).
@@ -307,6 +313,39 @@ impl NumberFormat {
 
         Ok(result)
     }
+}
+
+/// Evaluate General and literal-only numeric sections without resolving layout.
+fn evaluate_simple_number(plan: &SectionPlan, value: f64) -> Vec<render::RenderPart> {
+    evaluate_operations(plan, |part| match part {
+        FormatPart::GeneralNumber => Some(fallback_format(value)),
+        FormatPart::Locale(locale) => locale.currency.clone(),
+        FormatPart::Percent => Some("%".to_string()),
+        _ => None,
+    })
+}
+
+/// Execute ordered operations while delegating semantic field evaluation.
+fn evaluate_operations(
+    plan: &SectionPlan,
+    mut evaluate_semantic: impl FnMut(&FormatPart) -> Option<String>,
+) -> Vec<render::RenderPart> {
+    let mut output = Vec::new();
+
+    for operation in &plan.operations {
+        match operation {
+            Operation::Text(text) => render::push_text(&mut output, text.as_ref()),
+            Operation::Fill(character) => output.push(render::RenderPart::Fill(*character)),
+            Operation::Skip(character) => output.push(render::RenderPart::Skip(*character)),
+            Operation::Semantic(part) => {
+                if let Some(text) = evaluate_semantic(part) {
+                    render::push_text(&mut output, text);
+                }
+            }
+        }
+    }
+
+    output
 }
 
 /// Fallback formatting for when the format code cannot be applied.

@@ -47,3 +47,20 @@ fn default_formatting_uses_only_the_retained_final_fill() {
         ]
     );
 }
+
+#[test]
+fn skip_resolution_is_consistent_across_date_and_text_sections() {
+    assert_eq!(format_default("yyyy_)", 46031.0), "2026 ");
+
+    let format = NumberFormat::parse("@_) ").unwrap();
+    assert_eq!(
+        format.format_text("text", &FormatOptions::default()),
+        "text  "
+    );
+}
+
+#[test]
+fn general_literals_preserve_source_order() {
+    assert_eq!(format_default("\"USD \"General", 42.0), "USD 42");
+    assert_eq!(format_default("General\" USD\"", 42.0), "42 USD");
+}
