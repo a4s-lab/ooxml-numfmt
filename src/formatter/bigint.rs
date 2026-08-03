@@ -76,7 +76,7 @@ fn format_large_bigint(
         &value_str,
         &analysis.integer_placeholders,
         analysis.has_thousands_separator,
-        &analysis.inline_literals,
+        &analysis.inline_parts,
         opts,
     );
 
@@ -132,7 +132,7 @@ fn format_bigint_integer(
     value_str: &str,
     placeholders: &[crate::ast::DigitPlaceholder],
     use_thousands: bool,
-    inline_literals: &[(usize, String)],
+    inline_parts: &[(usize, FormatPart)],
     opts: &FormatOptions,
 ) -> String {
     let value_digits: Vec<char> = value_str.chars().collect();
@@ -142,8 +142,12 @@ fn format_bigint_integer(
 
     // Build right-to-left into Vec, then reverse once
     let separator_count = if use_thousands { output_len / 3 } else { 0 };
-    let literal_chars: usize = inline_literals.iter().map(|(_, s)| s.len()).sum();
-    let estimated_capacity = output_len + separator_count + literal_chars;
+    let inline_chars: usize = inline_parts
+        .iter()
+        .filter_map(|(_, part)| super::number::inline_part_text(part))
+        .map(str::len)
+        .sum();
+    let estimated_capacity = output_len + separator_count + inline_chars;
     let mut chars = Vec::with_capacity(estimated_capacity);
 
     // Process from right to left (least significant first)
@@ -155,16 +159,14 @@ fn format_bigint_integer(
             chars.push(opts.locale.thousands_separator);
         }
 
-        // Check if there's an inline literal at this position
-        let literals_at_pos: Vec<&str> = inline_literals
+        // Check if there are inline parts at this position.
+        for (_, part) in inline_parts
             .iter()
+            .rev()
             .filter(|(pos, _)| *pos == pos_from_right)
-            .map(|(_, s)| s.as_str())
-            .collect();
-
-        for literal_str in literals_at_pos.iter().rev() {
-            for ch in literal_str.chars().rev() {
-                chars.push(ch);
+        {
+            if let Some(text) = super::number::inline_part_text(part) {
+                chars.extend(text.chars().rev());
             }
         }
 
@@ -188,11 +190,11 @@ fn format_bigint_integer(
         chars.push('0');
     }
 
-    // Push any inline literals that are at positions beyond what we formatted
-    for (literal_pos, literal_str) in inline_literals {
-        if *literal_pos >= output_len {
-            for ch in literal_str.chars().rev() {
-                chars.push(ch);
+    // Push any inline parts that are at positions beyond what we formatted.
+    for (part_pos, part) in inline_parts {
+        if *part_pos >= output_len {
+            if let Some(text) = super::number::inline_part_text(part) {
+                chars.extend(text.chars().rev());
             }
         }
     }
