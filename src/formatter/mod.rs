@@ -206,7 +206,7 @@ impl NumberFormat {
 
     /// Selects the text section with the following policy:
     /// - If the 4th section is present, always return it.
-    /// - With fewer sections, use the last one containing `@`.
+    /// - With fewer sections, use the final section only if it contains `@`.
     /// - Otherwise, return None.
     fn select_text_section(&self) -> Option<&Section> {
         let sections = self.sections();
@@ -216,7 +216,7 @@ impl NumberFormat {
             return Some(&sections[3]);
         }
 
-        // With fewer sections, use the last one only if it contains `@`.
+        // With fewer sections, the final section is the text section only if it contains `@`.
         sections
             .last()
             .filter(|section| section.has_text_placeholder())
