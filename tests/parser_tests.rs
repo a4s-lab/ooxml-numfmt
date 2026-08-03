@@ -1,7 +1,7 @@
 //! Tests for the format code parser.
 
 use ooxml_numfmt::ast::{Color, DatePart, DigitPlaceholder, FormatPart, NamedColor};
-use ooxml_numfmt::NumberFormat;
+use ooxml_numfmt::{NumberFormat, ParseError};
 
 #[test]
 fn test_parse_simple_number() {
@@ -89,5 +89,42 @@ fn test_parse_multiple_fill_operators_keeps_only_last() {
             FormatPart::Digit(DigitPlaceholder::Zero),
             FormatPart::Fill('B'),
         ]
+    );
+}
+
+#[test]
+fn test_fraction_fill_support_boundary() {
+    let reason = "fill directives inside fraction patterns".to_string();
+
+    assert!(NumberFormat::parse("*x# ?/?").is_ok());
+    assert!(NumberFormat::parse("# ?/?*x").is_ok());
+
+    assert_eq!(
+        NumberFormat::parse("# *x?/?"),
+        Err(ParseError::UnsupportedFormat {
+            reason: reason.clone(),
+        })
+    );
+    assert_eq!(
+        NumberFormat::parse("# ?*x/?"),
+        Err(ParseError::UnsupportedFormat {
+            reason: reason.clone(),
+        })
+    );
+    assert_eq!(
+        NumberFormat::parse("# ?/*x?"),
+        Err(ParseError::UnsupportedFormat {
+            reason: reason.clone(),
+        })
+    );
+    assert_eq!(
+        NumberFormat::parse("#*x# ?/?"),
+        Err(ParseError::UnsupportedFormat {
+            reason: reason.clone(),
+        })
+    );
+    assert_eq!(
+        NumberFormat::parse("# ?/1*x6"),
+        Err(ParseError::UnsupportedFormat { reason })
     );
 }

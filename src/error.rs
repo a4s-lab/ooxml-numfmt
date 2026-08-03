@@ -25,6 +25,9 @@ pub enum ParseError {
 
     #[error("invalid format ID: {0} is not a recognized built-in format")]
     InvalidFormatId(u32),
+
+    #[error("unsupported format code: {reason}")]
+    UnsupportedFormat { reason: String },
 }
 
 /// Errors that can occur when formatting a value.

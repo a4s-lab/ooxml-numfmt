@@ -11,6 +11,7 @@ pub fn format_date(
     value: f64,
     section: &Section,
     opts: &FormatOptions,
+    fill_count: usize,
 ) -> Result<String, FormatError> {
     // SSF returns empty string for out-of-range dates (< 0 or > 2958465)
     // This matches Excel's behavior - see bits/35_datecode.js line 2
@@ -110,9 +111,10 @@ pub fn format_date(
     let weekday = serial_to_weekday(value, opts.date_system);
 
     // Build the formatted string
+    let active_fill = section.active_fill();
     let mut result = String::new();
 
-    for part in &section.parts {
+    for (index, part) in section.parts.iter().enumerate() {
         match part {
             FormatPart::DatePart(date_part) => {
                 let formatted = format_date_part(
@@ -146,10 +148,10 @@ pub fn format_date(
                 // Skip width of character - add a space for alignment
                 result.push(*c);
             }
-            FormatPart::Fill(_) => {
-                // Fill characters are handled at a higher level
-                // For now, just skip
+            FormatPart::Fill(character) if active_fill == Some(index) => {
+                result.extend(std::iter::repeat_n(*character, fill_count));
             }
+            FormatPart::Fill(_) => {}
             FormatPart::ThousandsSeparator => {
                 // In date formats, the thousands separator (,) is just a literal comma
                 result.push(opts.locale.thousands_separator);

@@ -8,7 +8,7 @@ mod text;
 #[cfg(feature = "bigint")]
 mod bigint;
 
-pub use number::format_number;
+pub use number::{format_number, format_number_with_fill_count};
 
 #[cfg(feature = "bigint")]
 #[allow(unused_imports)]
@@ -25,7 +25,30 @@ impl NumberFormat {
     /// For date formats or when precise error handling is needed,
     /// use `try_format()` instead.
     pub fn format(&self, value: f64, opts: &FormatOptions) -> String {
-        match self.try_format(value, opts) {
+        self.format_with_fill_count(value, opts, 0)
+    }
+
+    /// Format a numeric value using this format code, with the given fill count.
+    ///
+    /// A fill directive (`*x`) is omitted when `fill_count` is zero. If the selected
+    /// section has no fill directive, this behaves the same as [`Self::format`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ooxml_numfmt::{FormatOptions, NumberFormat};
+    ///
+    /// let format = NumberFormat::parse("*-0").unwrap();
+    /// let options = FormatOptions::default();
+    /// assert_eq!(format.format_with_fill_count(42.0, &options, 3), "---42");
+    /// ```
+    pub fn format_with_fill_count(
+        &self,
+        value: f64,
+        options: &FormatOptions,
+        fill_count: usize,
+    ) -> String {
+        match self.try_format_with_fill_count(value, options, fill_count) {
             Ok(result) => result,
             Err(_) => fallback_format(value),
         }
@@ -35,6 +58,18 @@ impl NumberFormat {
     ///
     /// Returns an error if the format cannot be applied to the value.
     pub fn try_format(&self, value: f64, opts: &FormatOptions) -> Result<String, FormatError> {
+        self.try_format_with_fill_count(value, opts, 0)
+    }
+
+    /// Try to format a numeric value using this format code, with the given fill count.
+    ///
+    /// Returns an error if the format cannot be applied to the value.
+    pub fn try_format_with_fill_count(
+        &self,
+        value: f64,
+        opts: &FormatOptions,
+        fill_count: usize,
+    ) -> Result<String, FormatError> {
         // Handle special float values
         if value.is_nan() {
             return Ok("NaN".to_string());
@@ -76,7 +111,7 @@ impl NumberFormat {
 
         // Check if this is a date format
         if section.has_date_parts() {
-            return date::format_date(format_value, section, opts);
+            return date::format_date(format_value, section, opts, fill_count);
         }
 
         // Determine if we need to add a minus sign
@@ -105,7 +140,11 @@ impl NumberFormat {
             && !has_scientific;
 
         // Format as a number
-        let mut result = format_number(format_value, section, opts)?;
+        let mut result = if fill_count == 0 {
+            format_number(format_value, section, opts)?
+        } else {
+            format_number_with_fill_count(format_value, section, opts, fill_count)?
+        };
 
         // Add minus sign for single-section formats with negative values
         // Note: format_number uses abs(value), so it never includes the minus sign
@@ -189,23 +228,50 @@ impl NumberFormat {
     /// If a fourth section is present, it is always used, including when it is
     /// literal-only or empty. With fewer sections, the last section is used if
     /// it contains a text placeholder (`@`). Otherwise, the text is returned as-is.
-    pub fn format_text(&self, text: &str, _opts: &FormatOptions) -> String {
-        if let Some(text_section) = self.select_text_section() {
-            let mut result = String::new();
+    pub fn format_text(&self, text: &str, opts: &FormatOptions) -> String {
+        self.format_text_with_fill_count(text, opts, 0)
+    }
 
-            for part in &text_section.parts {
-                match part {
-                    FormatPart::TextPlaceholder => result.push_str(text),
-                    FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => result.push_str(s),
-                    _ => {}
-                }
-            }
-
-            result
-        } else {
+    /// Format a text value using this format code, with the given fill count.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ooxml_numfmt::{FormatOptions, NumberFormat};
+    ///
+    /// let format = NumberFormat::parse("0;0;0;\"<\"@*x\">\"").unwrap();
+    /// let options = FormatOptions::default();
+    /// assert_eq!(
+    ///     format.format_text_with_fill_count("hello", &options, 3),
+    ///     "<helloxxx>"
+    /// );
+    /// ```
+    pub fn format_text_with_fill_count(
+        &self,
+        text: &str,
+        _options: &FormatOptions,
+        fill_count: usize,
+    ) -> String {
+        let Some(section) = self.select_text_section() else {
             // Default: return text as-is
-            text.to_string()
+            return text.to_string();
+        };
+
+        let active_fill = section.active_fill();
+        let mut result = String::new();
+
+        for (index, part) in section.parts.iter().enumerate() {
+            match part {
+                FormatPart::TextPlaceholder => result.push_str(text),
+                FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => result.push_str(s),
+                FormatPart::Fill(c) if active_fill == Some(index) => {
+                    result.extend(std::iter::repeat_n(*c, fill_count));
+                }
+                _ => {}
+            }
         }
+
+        result
     }
 
     fn select_text_section(&self) -> Option<&Section> {
@@ -229,7 +295,18 @@ impl NumberFormat {
     /// preserve precision.
     #[cfg(feature = "bigint")]
     pub fn format_bigint(&self, value: &num_bigint::BigInt, opts: &FormatOptions) -> String {
-        match self.try_format_bigint(value, opts) {
+        self.format_bigint_with_fill_count(value, opts, 0)
+    }
+
+    /// Format a BigInt value using this format code, with the given fill count.
+    #[cfg(feature = "bigint")]
+    pub fn format_bigint_with_fill_count(
+        &self,
+        value: &num_bigint::BigInt,
+        opts: &FormatOptions,
+        fill_count: usize,
+    ) -> String {
+        match self.try_format_bigint_with_fill_count(value, opts, fill_count) {
             Ok(result) => result,
             Err(_) => bigint::fallback_format_bigint(value),
         }
@@ -246,13 +323,24 @@ impl NumberFormat {
         value: &num_bigint::BigInt,
         opts: &FormatOptions,
     ) -> Result<String, FormatError> {
+        self.try_format_bigint_with_fill_count(value, opts, 0)
+    }
+
+    /// Try to format a BigInt value using this format code, with the given fill count.
+    #[cfg(feature = "bigint")]
+    pub fn try_format_bigint_with_fill_count(
+        &self,
+        value: &num_bigint::BigInt,
+        opts: &FormatOptions,
+        fill_count: usize,
+    ) -> Result<String, FormatError> {
         use num_bigint::Sign;
 
         // Check if value is within safe f64 range
         if bigint::is_safe_integer(value) {
             // Convert to f64 and use standard formatting
             let float_val: f64 = value.to_string().parse().unwrap_or(0.0);
-            return self.try_format(float_val, opts);
+            return self.try_format_with_fill_count(float_val, opts, fill_count);
         }
 
         // For large integers, use string-based formatting
@@ -283,7 +371,11 @@ impl NumberFormat {
         }
 
         // Format using BigInt-specific logic
-        let mut result = bigint::format_bigint(value, section, opts)?;
+        let mut result = if fill_count == 0 {
+            bigint::format_bigint(value, section, opts)?
+        } else {
+            bigint::format_bigint_with_fill_count(value, section, opts, fill_count)?
+        };
 
         // Add minus sign for negative values in single-section formats
         let sections = self.sections();
@@ -514,12 +606,29 @@ mod tests {
             make_section(vec![
                 FormatPart::Literal("<<".to_string()),
                 FormatPart::TextPlaceholder,
+                FormatPart::Fill('x'),
                 FormatPart::Literal(">>".to_string()),
             ]),
         ]);
 
         let opts = FormatOptions::default();
         assert_eq!(fmt.format_text("hello", &opts), "<<hello>>");
+        assert_eq!(
+            fmt.format_text_with_fill_count("hello", &opts, 3),
+            "<<helloxxx>>"
+        );
+    }
+
+    #[test]
+    fn test_format_text_uses_single_text_section() {
+        let fmt = NumberFormat::parse("*x@").unwrap();
+        let opts = FormatOptions::default();
+
+        assert_eq!(
+            fmt.format_text_with_fill_count("hello", &opts, 3),
+            "xxxhello"
+        );
+        assert_eq!(fmt.format_text("hello", &opts), "hello");
     }
 
     #[test]

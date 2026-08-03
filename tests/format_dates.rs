@@ -51,3 +51,26 @@ fn test_format_month_name() {
 
     assert_eq!(fmt.format(46031.0, &opts), "January 9, 2026");
 }
+
+#[test]
+fn test_fill_preserves_date_part_positions() {
+    let opts = FormatOptions::default();
+
+    let prefix = NumberFormat::parse("*xyyyy-mm-dd").unwrap();
+    assert_eq!(
+        prefix.format_with_fill_count(46031.0, &opts, 3),
+        "xxx2026-01-09"
+    );
+
+    let inline = NumberFormat::parse("yyyy*x-mm-dd").unwrap();
+    assert_eq!(
+        inline.format_with_fill_count(46031.0, &opts, 3),
+        "2026xxx-01-09"
+    );
+
+    let suffix = NumberFormat::parse("yyyy-mm-dd*x").unwrap();
+    assert_eq!(
+        suffix.format_with_fill_count(46031.0, &opts, 3),
+        "2026-01-09xxx"
+    );
+}

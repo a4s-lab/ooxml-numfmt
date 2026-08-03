@@ -38,7 +38,25 @@ pub fn format_bigint(
     }
 
     // For large integers, use string-based formatting
-    format_large_bigint(value, section, opts)
+    format_large_bigint(value, section, opts, 0)
+}
+
+/// Format a BigInt value according to a format section, with the given fill count.
+pub fn format_bigint_with_fill_count(
+    value: &BigInt,
+    section: &Section,
+    opts: &FormatOptions,
+    fill_count: usize,
+) -> Result<String, FormatError> {
+    // Check if value is within safe f64 range
+    if is_safe_integer(value) {
+        // Convert to f64 and use standard formatting
+        let float_val: f64 = value.to_string().parse().unwrap_or(0.0);
+        return super::format_number_with_fill_count(float_val, section, opts, fill_count);
+    }
+
+    // For large integers, use string-based formatting
+    format_large_bigint(value, section, opts, fill_count)
 }
 
 /// Format a BigInt value that exceeds f64's safe integer range.
@@ -47,6 +65,7 @@ fn format_large_bigint(
     value: &BigInt,
     section: &Section,
     opts: &FormatOptions,
+    fill_count: usize,
 ) -> Result<String, FormatError> {
     use num_bigint::Sign;
 
@@ -78,15 +97,21 @@ fn format_large_bigint(
         analysis.has_thousands_separator,
         &analysis.inline_parts,
         opts,
+        fill_count,
     );
 
     // Handle decimal places (for BigInt, decimal part is always 0)
-    let decimal_places = analysis.decimal_places();
-    let formatted = if decimal_places > 0 {
-        let zeros = "0".repeat(decimal_places);
+    let formatted = if analysis.decimal_places() > 0 {
+        let decimal = super::number::format_decimal(
+            0.0,
+            &analysis.decimal_placeholders,
+            &analysis.decimal_inline_parts,
+            opts,
+            fill_count,
+        );
         format!(
             "{}{}{}",
-            formatted_integer, opts.locale.decimal_separator, zeros
+            formatted_integer, opts.locale.decimal_separator, decimal
         )
     } else {
         formatted_integer
@@ -95,16 +120,7 @@ fn format_large_bigint(
     // Build prefix
     let mut result = String::new();
     for part in &analysis.prefix_parts {
-        match part {
-            FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => result.push_str(s),
-            FormatPart::Locale(locale_code) => {
-                if let Some(ref currency) = locale_code.currency {
-                    result.push_str(currency);
-                }
-            }
-            FormatPart::Percent => result.push('%'),
-            _ => {}
-        }
+        super::number::push_part(&mut result, part, fill_count);
     }
 
     // Add the formatted number
@@ -112,16 +128,7 @@ fn format_large_bigint(
 
     // Build suffix
     for part in &analysis.suffix_parts {
-        match part {
-            FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => result.push_str(s),
-            FormatPart::Locale(locale_code) => {
-                if let Some(ref currency) = locale_code.currency {
-                    result.push_str(currency);
-                }
-            }
-            FormatPart::Percent => result.push('%'),
-            _ => {}
-        }
+        super::number::push_part(&mut result, part, fill_count);
     }
 
     Ok(result)
@@ -134,6 +141,7 @@ fn format_bigint_integer(
     use_thousands: bool,
     inline_parts: &[(usize, FormatPart)],
     opts: &FormatOptions,
+    fill_count: usize,
 ) -> String {
     let value_digits: Vec<char> = value_str.chars().collect();
 
@@ -144,8 +152,7 @@ fn format_bigint_integer(
     let separator_count = if use_thousands { output_len / 3 } else { 0 };
     let inline_chars: usize = inline_parts
         .iter()
-        .filter_map(|(_, part)| super::number::inline_part_text(part))
-        .map(str::len)
+        .map(|(_, part)| super::number::part_output_len(part, fill_count))
         .sum();
     let estimated_capacity = output_len + separator_count + inline_chars;
     let mut chars = Vec::with_capacity(estimated_capacity);
@@ -165,9 +172,7 @@ fn format_bigint_integer(
             .rev()
             .filter(|(pos, _)| *pos == pos_from_right)
         {
-            if let Some(text) = super::number::inline_part_text(part) {
-                chars.extend(text.chars().rev());
-            }
+            super::number::push_part_reversed(&mut chars, part, fill_count);
         }
 
         if digit_index >= 0 {
@@ -193,9 +198,7 @@ fn format_bigint_integer(
     // Push any inline parts that are at positions beyond what we formatted.
     for (part_pos, part) in inline_parts {
         if *part_pos >= output_len {
-            if let Some(text) = super::number::inline_part_text(part) {
-                chars.extend(text.chars().rev());
-            }
+            super::number::push_part_reversed(&mut chars, part, fill_count);
         }
     }
 
@@ -213,6 +216,7 @@ pub fn fallback_format_bigint(value: &BigInt) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::NumberFormat;
 
     #[test]
     fn test_is_safe_integer() {
@@ -238,5 +242,54 @@ mod tests {
     fn test_fallback_format_bigint() {
         let big = BigInt::parse_bytes(b"123456822333333000", 10).unwrap();
         assert_eq!(fallback_format_bigint(&big), "123456822333333000");
+    }
+
+    #[test]
+    fn test_format_bigint_with_fill_count() {
+        let opts = FormatOptions::default();
+        let large = BigInt::parse_bytes(b"123456822333333000", 10).unwrap();
+
+        let prefix = NumberFormat::parse("*x0").unwrap();
+        assert_eq!(
+            prefix.format_bigint_with_fill_count(&large, &opts, 3),
+            "xxx123456822333333000"
+        );
+        assert_eq!(
+            prefix.format_bigint_with_fill_count(&-large.clone(), &opts, 3),
+            "-xxx123456822333333000"
+        );
+        assert_eq!(
+            prefix.format_bigint_with_fill_count(&BigInt::from(42), &opts, 3),
+            "xxx42"
+        );
+        assert_eq!(prefix.format_bigint(&large, &opts), large.to_string());
+        assert_eq!(
+            prefix.format_bigint_with_fill_count(&large, &opts, 0),
+            large.to_string()
+        );
+
+        let inline = NumberFormat::parse("0*x0").unwrap();
+        assert_eq!(
+            inline.format_bigint_with_fill_count(&large, &opts, 3),
+            "12345682233333300xxx0"
+        );
+
+        let after_decimal = NumberFormat::parse("0.*x00").unwrap();
+        assert_eq!(
+            after_decimal.format_bigint_with_fill_count(&large, &opts, 3),
+            "123456822333333000.xxx00"
+        );
+
+        let suffix = NumberFormat::parse("0*x").unwrap();
+        assert_eq!(
+            suffix.format_bigint_with_fill_count(&large, &opts, 3),
+            "123456822333333000xxx"
+        );
+
+        let unicode = NumberFormat::parse("*한0").unwrap();
+        assert_eq!(
+            unicode.format_bigint_with_fill_count(&large, &opts, 3),
+            "한한한123456822333333000"
+        );
     }
 }

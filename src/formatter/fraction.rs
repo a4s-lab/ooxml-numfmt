@@ -2,7 +2,7 @@
 
 use crate::ast::{DigitPlaceholder, FormatPart, FractionDenom, Section};
 use crate::error::FormatError;
-use crate::formatter::number::format_simple_with_placeholders;
+use crate::formatter::number::{format_simple_with_placeholders, push_part};
 use crate::options::FormatOptions;
 
 /// Format a fraction part (numerator or denominator) with digit placeholders.
@@ -16,6 +16,7 @@ pub fn format_fraction(
     value: f64,
     section: &Section,
     _opts: &FormatOptions,
+    fill_count: usize,
 ) -> Result<String, FormatError> {
     // Find the fraction part in the section
     let fraction_part = section.parts.iter().find_map(|p| {
@@ -116,11 +117,6 @@ pub fn format_fraction(
     // Format the result
     let mut result = String::new();
 
-    // Add sign for negative values
-    if value < 0.0 {
-        result.push('-');
-    }
-
     // Format integer part (mixed fractions only)
     if is_mixed {
         if integer_part > 0 || num == 0 {
@@ -209,7 +205,21 @@ pub fn format_fraction(
         }
     }
 
-    Ok(result)
+    // Build the final result with surrounding literals and fill directives in source order
+    let mut section_result = String::new();
+    for part in &section.parts {
+        match part {
+            FormatPart::Fraction { .. } => section_result.push_str(&result),
+            _ => push_part(&mut section_result, part, fill_count),
+        }
+    }
+
+    // Add sign for negative values before any prefix parts
+    if value < 0.0 {
+        section_result.insert(0, '-');
+    }
+
+    Ok(section_result)
 }
 
 /// Find the best fraction approximation for a decimal value.

@@ -96,6 +96,50 @@ pub(super) fn inline_part_text(part: &FormatPart) -> Option<&str> {
     }
 }
 
+pub(super) fn push_part(output: &mut String, part: &FormatPart, fill_count: usize) {
+    if let Some(text) = inline_part_text(part) {
+        output.push_str(text);
+        return;
+    }
+
+    match part {
+        FormatPart::Percent => output.push('%'),
+        FormatPart::Skip(_) => output.push(' '),
+        FormatPart::Fill(character) => {
+            output.extend(std::iter::repeat_n(*character, fill_count));
+        }
+        _ => {}
+    }
+}
+
+pub(super) fn push_part_reversed(output: &mut Vec<char>, part: &FormatPart, fill_count: usize) {
+    if let Some(text) = inline_part_text(part) {
+        output.extend(text.chars().rev());
+        return;
+    }
+
+    match part {
+        FormatPart::Percent => output.push('%'),
+        FormatPart::Skip(_) => output.push(' '),
+        FormatPart::Fill(character) => {
+            output.extend(std::iter::repeat_n(*character, fill_count));
+        }
+        _ => {}
+    }
+}
+
+pub(super) fn part_output_len(part: &FormatPart, fill_count: usize) -> usize {
+    if let Some(text) = inline_part_text(part) {
+        return text.len();
+    }
+
+    match part {
+        FormatPart::Percent | FormatPart::Skip(_) => 1,
+        FormatPart::Fill(character) => character.len_utf8() * fill_count,
+        _ => 0,
+    }
+}
+
 /// Analyze a format section to extract its numeric structure.
 pub fn analyze_format(section: &Section) -> FormatAnalysis {
     let mut integer_placeholders = Vec::new();
@@ -106,6 +150,11 @@ pub fn analyze_format(section: &Section) -> FormatAnalysis {
     let mut decimal_inline_parts = Vec::new();
     let mut prefix_parts = Vec::new();
     let mut suffix_parts = Vec::new();
+    let active_fill = section.active_fill();
+    let last_numeric = section
+        .parts
+        .iter()
+        .rposition(|part| matches!(part, FormatPart::Digit(_) | FormatPart::DecimalPoint));
 
     // First, count trailing commas by scanning backwards from the end
     // Any ThousandsSeparator after the last Digit/DecimalPoint is a trailing comma
@@ -138,7 +187,7 @@ pub fn analyze_format(section: &Section) -> FormatAnalysis {
     let mut after_decimal = false;
     let mut after_digits = false;
 
-    for part in &section.parts {
+    for (index, part) in section.parts.iter().enumerate() {
         match part {
             FormatPart::Digit(placeholder) => {
                 seen_digit = true;
@@ -209,6 +258,18 @@ pub fn analyze_format(section: &Section) -> FormatAnalysis {
                 }
                 let _ = c; // suppress unused warning
             }
+            FormatPart::Fill(_) if active_fill == Some(index) => {
+                if !seen_digit {
+                    prefix_parts.push(part.clone());
+                } else if last_numeric.is_some_and(|last| index > last) {
+                    suffix_parts.push(part.clone());
+                } else if after_decimal {
+                    decimal_inline_parts.push((decimal_placeholders.len(), part.clone()));
+                } else {
+                    inline_parts.push((integer_placeholders.len(), part.clone()));
+                }
+            }
+            FormatPart::Fill(_) => {}
             _ => {
                 // Handle other parts as literals in prefix/suffix
                 if !seen_digit {
@@ -262,6 +323,15 @@ pub fn format_number(
     section: &Section,
     opts: &FormatOptions,
 ) -> Result<String, FormatError> {
+    format_number_with_fill_count(value, section, opts, 0)
+}
+
+pub fn format_number_with_fill_count(
+    value: f64,
+    section: &Section,
+    opts: &FormatOptions,
+    fill_count: usize,
+) -> Result<String, FormatError> {
     // Check if this is scientific notation
     let scientific_part = section.parts.iter().find_map(|p| {
         if let FormatPart::Scientific { upper, show_plus } = p {
@@ -272,7 +342,7 @@ pub fn format_number(
     });
 
     if let Some((upper, show_plus)) = scientific_part {
-        return format_scientific(value, section, upper, show_plus, opts);
+        return format_scientific(value, section, upper, show_plus, opts, fill_count);
     }
 
     // Use pre-computed format type from metadata for better performance
@@ -280,7 +350,7 @@ pub fn format_number(
 
     // Check if this is a fraction format
     if section.metadata.format_type == FormatType::Fraction {
-        return crate::formatter::fraction::format_fraction(value, section, opts);
+        return crate::formatter::fraction::format_fraction(value, section, opts, fill_count);
     }
 
     // Check if this is a text-only format
@@ -303,26 +373,16 @@ pub fn format_number(
             .any(|p| matches!(p, FormatPart::GeneralNumber));
 
         if has_general_number {
-            // Section has GeneralNumber part - use General format + append literals
-            // This handles cases like "General " where we want to format the number and add a suffix
-            let mut result = crate::formatter::fallback_format(value);
+            // Section has GeneralNumber part - render General in source order with surrounding parts
+            // This handles cases like "General " and literals or fill directives around General
+            let mut result = String::new();
             for part in &section.parts {
                 match part {
-                    FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => result.push_str(s),
-                    FormatPart::Locale(locale_code) => {
-                        if let Some(ref currency) = locale_code.currency {
-                            result.push_str(currency);
-                        }
-                    }
-                    FormatPart::Percent => result.push('%'),
-                    FormatPart::Skip(_) => result.push(' '),
-                    FormatPart::Fill(_) => {
-                        // Fill character - for now just skip it
-                    }
                     FormatPart::GeneralNumber => {
-                        // Already handled - skip
+                        // Render the General value at its source position
+                        result.push_str(&crate::formatter::fallback_format(value));
                     }
-                    _ => {}
+                    _ => push_part(&mut result, part, fill_count),
                 }
             }
             return Ok(result);
@@ -330,21 +390,7 @@ pub fn format_number(
             // No GeneralNumber - just return the literals without formatting the number
             let mut result = String::new();
             for part in &section.parts {
-                match part {
-                    FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => result.push_str(s),
-                    FormatPart::Locale(locale_code) => {
-                        if let Some(ref currency) = locale_code.currency {
-                            result.push_str(currency);
-                        }
-                    }
-                    FormatPart::Percent => result.push('%'),
-                    FormatPart::Skip(_) => result.push(' '),
-                    FormatPart::Fill(_) => {
-                        // Fill character - for now just skip it in literal-only formats
-                        // TODO: implement proper fill behavior with available width
-                    }
-                    _ => {}
-                }
+                push_part(&mut result, part, fill_count);
             }
             return Ok(result);
         }
@@ -364,7 +410,7 @@ pub fn format_number(
         && analysis.decimal_placeholders.is_empty()
     {
         // Value is an exact integer within safe range and no decimal formatting needed
-        return format_number_as_integer(value as i64, section, opts);
+        return format_number_as_integer(value as i64, &analysis, opts, fill_count);
     }
 
     // Apply percent multiplication
@@ -387,10 +433,10 @@ pub fn format_number(
     let rounded = (adjusted_value * multiplier).round() / multiplier;
 
     // Format the number with placeholders
-    let formatted = format_with_placeholders(rounded, &analysis, opts);
+    let formatted = format_with_placeholders(rounded, &analysis, opts, fill_count);
 
     // Build the final result with prefix and suffix
-    let result = build_result(&analysis, &formatted, opts);
+    let result = build_result(&analysis, &formatted, fill_count);
 
     Ok(result)
 }
@@ -400,11 +446,10 @@ pub fn format_number(
 /// This path is used for values that are exact integers within safe range (< 2^53).
 fn format_number_as_integer(
     value: i64,
-    section: &Section,
+    analysis: &FormatAnalysis,
     opts: &FormatOptions,
+    fill_count: usize,
 ) -> Result<String, FormatError> {
-    let analysis = analyze_format(section);
-
     // Work with absolute value, track sign separately
     let mut adjusted_value = value.abs();
 
@@ -418,48 +463,25 @@ fn format_number_as_integer(
         adjusted_value /= 1000;
     }
 
-    // For integers, decimal places should be zero unless explicitly formatted
-    let decimal_places = analysis.decimal_places();
+    let formatted = format_integer(
+        adjusted_value as u64,
+        &analysis.integer_placeholders,
+        analysis.has_thousands_separator,
+        &analysis.inline_parts,
+        opts,
+        fill_count,
+    );
 
-    if decimal_places > 0 {
-        // Integer displayed with decimal places (e.g., "0.00" formatting integer 42 -> "42.00")
-        // Convert to string and pad with zeros
-        let integer_str = format_integer(
-            adjusted_value as u64,
-            &analysis.integer_placeholders,
-            analysis.has_thousands_separator,
-            &analysis.inline_parts,
-            opts,
-        );
-
-        // Add decimal point and zeros
-        let decimal_str = "0".repeat(decimal_places);
-        let formatted = format!(
-            "{}{}{}",
-            integer_str, opts.locale.decimal_separator, decimal_str
-        );
-
-        // Build the final result with prefix and suffix
-        let result = build_result(&analysis, &formatted, opts);
-        Ok(result)
-    } else {
-        // Pure integer formatting (no decimal places)
-        let formatted = format_integer(
-            adjusted_value as u64,
-            &analysis.integer_placeholders,
-            analysis.has_thousands_separator,
-            &analysis.inline_parts,
-            opts,
-        );
-
-        // Build the final result with prefix and suffix
-        let result = build_result(&analysis, &formatted, opts);
-        Ok(result)
-    }
+    Ok(build_result(analysis, &formatted, fill_count))
 }
 
 /// Format a number according to the analysis.
-fn format_with_placeholders(value: f64, analysis: &FormatAnalysis, opts: &FormatOptions) -> String {
+fn format_with_placeholders(
+    value: f64,
+    analysis: &FormatAnalysis,
+    opts: &FormatOptions,
+    fill_count: usize,
+) -> String {
     let decimal_places = analysis.decimal_places();
 
     // Split into integer and decimal parts
@@ -473,6 +495,7 @@ fn format_with_placeholders(value: f64, analysis: &FormatAnalysis, opts: &Format
         analysis.has_thousands_separator,
         &analysis.inline_parts,
         opts,
+        fill_count,
     );
 
     // Format decimal part
@@ -482,6 +505,7 @@ fn format_with_placeholders(value: f64, analysis: &FormatAnalysis, opts: &Format
             &analysis.decimal_placeholders,
             &analysis.decimal_inline_parts,
             opts,
+            fill_count,
         );
         format!(
             "{}{}{}",
@@ -499,6 +523,7 @@ fn format_integer(
     use_thousands: bool,
     inline_parts: &[(usize, FormatPart)],
     opts: &FormatOptions,
+    fill_count: usize,
 ) -> String {
     let value_str = value.to_string();
     let value_digits: Vec<char> = value_str.chars().collect();
@@ -515,9 +540,7 @@ fn format_integer(
         sorted_parts.sort_by_key(|a| std::cmp::Reverse(a.0));
 
         for (_, part) in sorted_parts {
-            if let Some(text) = inline_part_text(part) {
-                result.push_str(text);
-            }
+            push_part(&mut result, part, fill_count);
         }
         return result;
     }
@@ -544,8 +567,7 @@ fn format_integer(
     let separator_count = if use_thousands { output_len / 3 } else { 0 };
     let inline_chars: usize = inline_parts
         .iter()
-        .filter_map(|(_, part)| inline_part_text(part))
-        .map(str::len)
+        .map(|(_, part)| part_output_len(part, fill_count))
         .sum();
     let estimated_capacity = output_len + separator_count + inline_chars;
     let mut chars = Vec::with_capacity(estimated_capacity);
@@ -567,9 +589,7 @@ fn format_integer(
             .rev()
             .filter(|(pos, _)| *pos == pos_from_right)
         {
-            if let Some(text) = inline_part_text(part) {
-                chars.extend(text.chars().rev());
-            }
+            push_part_reversed(&mut chars, part, fill_count);
         }
 
         if digit_index >= 0 {
@@ -605,9 +625,7 @@ fn format_integer(
     // (parts in the leftmost optional placeholder region).
     for (part_pos, part) in inline_parts {
         if *part_pos >= output_len {
-            if let Some(text) = inline_part_text(part) {
-                chars.extend(text.chars().rev());
-            }
+            push_part_reversed(&mut chars, part, fill_count);
         }
     }
 
@@ -619,11 +637,12 @@ fn format_integer(
 }
 
 /// Format the decimal part with placeholders.
-fn format_decimal(
+pub(super) fn format_decimal(
     value: f64,
     placeholders: &[DigitPlaceholder],
     decimal_inline_parts: &[(usize, FormatPart)],
     _opts: &FormatOptions,
+    fill_count: usize,
 ) -> String {
     if placeholders.is_empty() {
         return String::new();
@@ -671,9 +690,7 @@ fn format_decimal(
         // Insert any decimal inline parts that appear at this position.
         for (part_pos, part) in decimal_inline_parts {
             if *part_pos == i {
-                if let Some(text) = inline_part_text(part) {
-                    result.push_str(text);
-                }
+                push_part(&mut result, part, fill_count);
             }
         }
 
@@ -709,72 +726,102 @@ fn format_decimal(
     // Append any decimal inline parts that come after all placeholders.
     for (part_pos, part) in decimal_inline_parts {
         if *part_pos >= placeholders.len() {
-            if let Some(text) = inline_part_text(part) {
-                result.push_str(text);
-            }
+            push_part(&mut result, part, fill_count);
         }
     }
 
     result
 }
 
-/// Calculate the exact character count for format parts (prefix/suffix).
-fn count_part_chars(parts: &[FormatPart]) -> usize {
-    parts
-        .iter()
-        .map(|part| match part {
-            FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => s.len(),
-            FormatPart::Locale(locale_code) => locale_code.currency.as_ref().map_or(0, |s| s.len()),
-            FormatPart::Percent => 1,
-            _ => 0,
-        })
-        .sum()
+/// Placeholder region currently being analyzed.
+#[derive(Clone, Copy)]
+enum ScientificRegion {
+    MantissaInteger,
+    MantissaDecimal,
+    Exponent,
 }
 
-/// Build the final result string with prefix and suffix parts.
-fn build_result(
-    analysis: &FormatAnalysis,
-    formatted_number: &str,
-    _opts: &FormatOptions,
-) -> String {
-    // Pre-allocate exact capacity (no reallocation, no waste)
-    let capacity = count_part_chars(&analysis.prefix_parts)
-        + formatted_number.len()
-        + count_part_chars(&analysis.suffix_parts);
-    let mut result = String::with_capacity(capacity);
+/// Structural analysis of a scientific format section.
+struct ScientificAnalysis {
+    /// Mantissa placeholders before the decimal point.
+    mantissa_integer_placeholders: Vec<DigitPlaceholder>,
+    /// Mantissa placeholders after the decimal point.
+    mantissa_decimal_placeholders: Vec<DigitPlaceholder>,
+    /// Exponent digit placeholders.
+    exponent_placeholders: Vec<DigitPlaceholder>,
+    /// Parts positioned among mantissa integer placeholders.
+    mantissa_integer_parts: Vec<(usize, FormatPart)>,
+    /// Parts positioned among mantissa decimal placeholders.
+    mantissa_decimal_parts: Vec<(usize, FormatPart)>,
+    /// Parts positioned among exponent placeholders.
+    exponent_parts: Vec<(usize, FormatPart)>,
+}
 
-    // Add prefix parts
-    for part in &analysis.prefix_parts {
+/// Analyze a scientific format section into placeholder groups.
+fn analyze_scientific_format(section: &Section) -> ScientificAnalysis {
+    let active_fill = section.active_fill();
+    let mut region = ScientificRegion::MantissaInteger;
+    let mut mantissa_integer_placeholders = Vec::new();
+    let mut mantissa_decimal_placeholders = Vec::new();
+    let mut exponent_placeholders = Vec::new();
+    let mut mantissa_integer_parts = Vec::new();
+    let mut mantissa_decimal_parts = Vec::new();
+    let mut exponent_parts = Vec::new();
+
+    // Split placeholders and the active fill into mantissa and exponent regions.
+    for (index, part) in section.parts.iter().enumerate() {
         match part {
-            FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => result.push_str(s),
-            FormatPart::Locale(locale_code) => {
-                if let Some(ref currency) = locale_code.currency {
-                    result.push_str(currency);
+            FormatPart::DecimalPoint if !matches!(region, ScientificRegion::Exponent) => {
+                region = ScientificRegion::MantissaDecimal;
+            }
+            FormatPart::Scientific { .. } => {
+                region = ScientificRegion::Exponent;
+            }
+            FormatPart::Digit(placeholder) => match region {
+                ScientificRegion::MantissaInteger => {
+                    mantissa_integer_placeholders.push(*placeholder)
+                }
+                ScientificRegion::MantissaDecimal => {
+                    mantissa_decimal_placeholders.push(*placeholder)
+                }
+                ScientificRegion::Exponent => exponent_placeholders.push(*placeholder),
+            },
+            FormatPart::Fill(_) if active_fill == Some(index) => {
+                match region {
+                    ScientificRegion::MantissaInteger => mantissa_integer_parts
+                        .push((mantissa_integer_placeholders.len(), part.clone())),
+                    ScientificRegion::MantissaDecimal => mantissa_decimal_parts
+                        .push((mantissa_decimal_placeholders.len(), part.clone())),
+                    ScientificRegion::Exponent => {
+                        exponent_parts.push((exponent_placeholders.len(), part.clone()))
+                    }
                 }
             }
-            FormatPart::Percent => result.push('%'),
             _ => {}
         }
     }
 
-    // Add the formatted number
-    result.push_str(formatted_number);
+    // Integer-like regions are rendered right-to-left, so convert their part positions.
+    let integer_part_count = mantissa_integer_placeholders.len();
+    let mantissa_integer_parts = mantissa_integer_parts
+        .into_iter()
+        .map(|(placeholder_count, part)| (integer_part_count - placeholder_count, part))
+        .collect();
 
-    // Add suffix parts
-    for part in &analysis.suffix_parts {
-        match part {
-            FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => result.push_str(s),
-            FormatPart::Locale(locale_code) => {
-                if let Some(ref currency) = locale_code.currency {
-                    result.push_str(currency);
-                }
-            }
-            FormatPart::Percent => result.push('%'),
-            _ => {}
-        }
+    let exponent_part_count = exponent_placeholders.len();
+    let exponent_parts = exponent_parts
+        .into_iter()
+        .map(|(placeholder_count, part)| (exponent_part_count - placeholder_count, part))
+        .collect();
+
+    ScientificAnalysis {
+        mantissa_integer_placeholders,
+        mantissa_decimal_placeholders,
+        exponent_placeholders,
+        mantissa_integer_parts,
+        mantissa_decimal_parts,
+        exponent_parts,
     }
-
-    result
 }
 
 /// Format a number in scientific notation according to a format section.
@@ -783,107 +830,129 @@ fn format_scientific(
     section: &Section,
     upper: bool,
     show_plus: bool,
-    _opts: &FormatOptions,
+    opts: &FormatOptions,
+    fill_count: usize,
 ) -> Result<String, FormatError> {
-    // Count digits before and after decimal in mantissa, and exponent digits
-    let mut mantissa_integer_places = 0;
-    let mut mantissa_decimal_places = 0;
-    let mut exponent_digits = 0;
-    let mut seen_decimal = false;
-    let mut after_exponent = false;
-
-    for part in &section.parts {
-        match part {
-            FormatPart::Digit(_) if !seen_decimal && !after_exponent => {
-                mantissa_integer_places += 1;
-            }
-            FormatPart::DecimalPoint if !after_exponent => {
-                seen_decimal = true;
-            }
-            FormatPart::Digit(_) if seen_decimal && !after_exponent => {
-                mantissa_decimal_places += 1;
-            }
-            FormatPart::Scientific { .. } => {
-                after_exponent = true;
-            }
-            FormatPart::Digit(_) if after_exponent => {
-                exponent_digits += 1;
-            }
-            _ => {}
-        }
-    }
-
-    // Convert value to scientific notation
+    let analysis = analyze_scientific_format(section);
     let abs_value = value.abs();
+    let integer_places = analysis.mantissa_integer_placeholders.len().max(1);
+    let decimal_places = analysis.mantissa_decimal_placeholders.len();
 
-    // Handle zero specially
-    if abs_value == 0.0 {
-        let zeros = "0".repeat(mantissa_decimal_places);
-        let decimal_part = if mantissa_decimal_places > 0 {
-            format!(".{}", zeros)
-        } else {
-            String::new()
-        };
-        let exp_char = if upper { 'E' } else { 'e' };
-        let sign = if show_plus { "+" } else { "" };
-        return Ok(format!("0{}{}{sign}00", decimal_part, exp_char));
-    }
-
-    // Calculate exponent based on integer placeholder count
-    // Standard format (0) or minimal format (no placeholder): mantissa 1-10, exponent = log10(value)
-    // Format with multiple placeholders (##0): adjust exponent to use more mantissa digits
-    let base_exponent = abs_value.log10().floor() as i32;
-
-    let exponent = if mantissa_integer_places > 1 {
-        // For ##0 (3 places), we want mantissa to be in range [1, 1000)
-        // Adjust exponent to be a multiple of group_size to group digits
-        // For ##0: exponent should be multiple of 3, giving mantissa like 123.5E+6, not 1.235E+8
-        let group_size = mantissa_integer_places.max(1);
-        // Use floor division to handle negative exponents correctly
-        // For base_exponent = -1, group_size = 3: floor(-1/3) * 3 = -1 * 3 = -3
-        ((base_exponent as f64) / (group_size as f64)).floor() as i32 * group_size
+    // Calculate the exponent from the number of integer placeholders.
+    // A single placeholder uses standard scientific notation, while multiple
+    // placeholders group the exponent to keep more digits in the mantissa.
+    let mut exponent = if abs_value == 0.0 {
+        0
     } else {
-        base_exponent
-    };
-
-    let mantissa = abs_value / 10_f64.powi(exponent);
-
-    // Format mantissa with appropriate decimal places
-    let mantissa_str = if mantissa_decimal_places > 0 {
-        format!("{:.prec$}", mantissa, prec = mantissa_decimal_places)
-    } else {
-        format!("{:.0}", mantissa)
-    };
-
-    // Format exponent
-    let exp_char = if upper { 'E' } else { 'e' };
-    let exp_sign = if exponent >= 0 {
-        if show_plus {
-            "+"
+        let base_exponent = abs_value.log10().floor() as i32;
+        if integer_places > 1 {
+            // For ##0, use exponent multiples of three and a mantissa in [1, 1000).
+            ((base_exponent as f64) / (integer_places as f64)).floor() as i32
+                * integer_places as i32
         } else {
-            ""
+            base_exponent
         }
-    } else {
-        "-"
     };
-    let exp_abs = exponent.abs();
 
-    // Format exponent with appropriate zero padding
-    let exp_str = if exponent_digits >= 2 {
-        // 0.00E+00 format uses 2-digit exponents
-        format!("{:02}", exp_abs)
+    // Convert the value to a mantissa using the selected exponent.
+    let mantissa = if abs_value == 0.0 {
+        0.0
     } else {
-        // ##0.0E+0 format uses minimal digits
-        format!("{}", exp_abs)
+        abs_value / 10_f64.powi(exponent)
     };
-    let formatted = format!("{}{}{}{}", mantissa_str, exp_char, exp_sign, exp_str);
 
-    // Apply sign for negative values
-    if value < 0.0 {
-        Ok(format!("-{}", formatted))
-    } else {
-        Ok(formatted)
+    // Round the mantissa to the requested decimal precision before rendering.
+    let effective_decimal_places = decimal_places.min(15);
+    let multiplier = 10_f64.powi(effective_decimal_places as i32);
+    let mut rounded_mantissa = (mantissa * multiplier).round() / multiplier;
+    let limit = 10_f64.powi(integer_places as i32);
+
+    // Advance the grouped exponent if rounding overflows the mantissa width.
+    if rounded_mantissa >= limit {
+        rounded_mantissa /= limit;
+        exponent += integer_places as i32;
     }
+
+    // Render each placeholder group separately to preserve positioned parts.
+    let mantissa_integer = rounded_mantissa.trunc() as u64;
+    let mantissa_decimal = rounded_mantissa.fract();
+    let integer = format_integer(
+        mantissa_integer,
+        &analysis.mantissa_integer_placeholders,
+        false,
+        &analysis.mantissa_integer_parts,
+        opts,
+        fill_count,
+    );
+    let decimal = format_decimal(
+        mantissa_decimal,
+        &analysis.mantissa_decimal_placeholders,
+        &analysis.mantissa_decimal_parts,
+        opts,
+        fill_count,
+    );
+    let exponent_digits = format_integer(
+        exponent.unsigned_abs() as u64,
+        &analysis.exponent_placeholders,
+        false,
+        &analysis.exponent_parts,
+        opts,
+        fill_count,
+    );
+
+    // Build the scientific result from the rendered placeholder groups.
+    let mut result = String::new();
+
+    // Apply the value sign before any mantissa prefix parts.
+    if value < 0.0 {
+        result.push('-');
+    }
+    result.push_str(&integer);
+    if !analysis.mantissa_decimal_placeholders.is_empty() {
+        result.push(opts.locale.decimal_separator);
+        result.push_str(&decimal);
+    }
+    result.push(if upper { 'E' } else { 'e' });
+    if exponent < 0 {
+        result.push('-');
+    } else if show_plus {
+        result.push('+');
+    }
+    result.push_str(&exponent_digits);
+
+    Ok(result)
+}
+
+/// Build the final result string with prefix and suffix parts.
+fn build_result(analysis: &FormatAnalysis, formatted_number: &str, fill_count: usize) -> String {
+    // Pre-allocate exact capacity (no reallocation, no waste)
+    let capacity = count_part_chars(&analysis.prefix_parts, fill_count)
+        + formatted_number.len()
+        + count_part_chars(&analysis.suffix_parts, fill_count);
+    let mut result = String::with_capacity(capacity);
+
+    // Add prefix parts
+    for part in &analysis.prefix_parts {
+        push_part(&mut result, part, fill_count);
+    }
+
+    // Add the formatted number
+    result.push_str(formatted_number);
+
+    // Add suffix parts
+    for part in &analysis.suffix_parts {
+        push_part(&mut result, part, fill_count);
+    }
+
+    result
+}
+
+/// Calculate the output byte length for format parts (prefix/suffix).
+fn count_part_chars(parts: &[FormatPart], fill_count: usize) -> usize {
+    parts
+        .iter()
+        .map(|part| part_output_len(part, fill_count))
+        .sum()
 }
 
 #[cfg(test)]

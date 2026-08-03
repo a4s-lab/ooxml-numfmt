@@ -381,6 +381,13 @@ impl Section {
     pub fn has_percent(&self) -> bool {
         self.parts.iter().any(|p| matches!(p, FormatPart::Percent))
     }
+
+    /// Returns the index of the last fill part in this section.
+    pub(crate) fn active_fill(&self) -> Option<usize> {
+        self.parts
+            .iter()
+            .rposition(|part| matches!(part, FormatPart::Fill(_)))
+    }
 }
 
 /// A parsed number format code.

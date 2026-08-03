@@ -17,3 +17,14 @@ fn test_parse_error_too_many_sections() {
     let msg = format!("{}", err);
     assert!(msg.contains("4"));
 }
+
+#[test]
+fn test_parse_error_unsupported_format() {
+    let err = ParseError::UnsupportedFormat {
+        reason: "fill directives inside fraction patterns".to_string(),
+    };
+    let msg = err.to_string();
+
+    assert!(msg.contains("unsupported format code"));
+    assert!(msg.contains("fill directives inside fraction patterns"));
+}

@@ -411,7 +411,7 @@ impl<'a> Parser<'a> {
             }
         }
 
-        Ok(builder.build())
+        builder.build()
     }
 
     /// Parse bracket content: [Red], [>100], [h], [$-409], etc.
@@ -627,9 +627,9 @@ impl SectionBuilder {
         self.parts.push(part);
     }
 
-    fn build(mut self) -> Section {
+    fn build(mut self) -> Result<Section, ParseError> {
         // Post-process to detect fraction patterns
-        self.detect_fractions();
+        self.detect_fractions()?;
 
         // Post-process to detect subsecond patterns in date formats
         self.detect_subseconds();
@@ -637,12 +637,12 @@ impl SectionBuilder {
         // Compute metadata by scanning the parts once
         let metadata = self.compute_metadata();
 
-        Section {
+        Ok(Section {
             condition: self.condition,
             color: self.color,
             parts: self.parts,
             metadata,
-        }
+        })
     }
 
     /// Compute section metadata by scanning parts once
@@ -730,8 +730,50 @@ impl SectionBuilder {
     }
 
     /// Detect and merge fraction patterns in the parts list.
-    /// Looks for patterns like: [digits] "/" [digits] and converts to Fraction
-    fn detect_fractions(&mut self) {
+    /// Looks for patterns like: [digits] "/" [digits] and converts to Fraction.
+    ///
+    /// # Examples
+    ///
+    /// - Allowed: `*x# ?/?` and `# ?/?*x` (fill outside the fraction pattern).
+    /// - Disallowed: `# ?*x/?` and `# ?/1*x6` (fill inside the fraction pattern).
+    fn detect_fractions(&mut self) -> Result<(), ParseError> {
+        if let Some(fill_index) = self
+            .parts
+            .iter()
+            .position(|part| matches!(part, FormatPart::Fill(_)))
+        {
+            // To detect `Fill` inside the fraction pattern, try normalizing fraction parts by excluding fill parts.
+            let fill_offset = self.parts[..fill_index]
+                .iter()
+                .filter(|part| !matches!(part, FormatPart::Fill(_)))
+                .count();
+            let mut probe = Self {
+                condition: None,
+                color: None,
+                parts: self
+                    .parts
+                    .iter()
+                    .filter(|part| !matches!(part, FormatPart::Fill(_)))
+                    .cloned()
+                    .collect(),
+            };
+            let fraction_ranges = probe.normalize_fractions();
+            if fraction_ranges
+                .iter()
+                .any(|range| fill_offset > range.start && fill_offset < range.end)
+            {
+                return Err(ParseError::UnsupportedFormat {
+                    reason: "fill directives inside fraction patterns".to_string(),
+                });
+            }
+        }
+
+        self.normalize_fractions();
+        Ok(())
+    }
+
+    fn normalize_fractions(&mut self) -> Vec<std::ops::Range<usize>> {
+        let mut fraction_ranges = Vec::new();
         let mut new_parts = Vec::new();
         let mut i = 0;
 
@@ -807,11 +849,12 @@ impl SectionBuilder {
                         if !num_digits.is_empty() {
                             // Found numerator, now collect any integer part before that
                             let num_start = num_end - num_digits.len();
-                            let mut int_digits = if num_start > 0 {
+                            let (mut int_digits, integer_start) = if num_start > 0 {
                                 self.collect_integer_part(num_start - 1, &mut new_parts)
                             } else {
-                                Vec::new()
+                                (Vec::new(), None)
                             };
+                            let fraction_start = integer_start.unwrap_or(num_start);
 
                             // Check if this is a mixed fraction or improper fraction
                             // Mixed fraction: has space between integer and numerator (e.g., "# ??/??")
@@ -882,6 +925,11 @@ impl SectionBuilder {
                                 space_before_slash,
                                 space_after_slash,
                             };
+
+                            // Preserve prefix parts outside the consumed fraction range
+                            if fraction_start > i {
+                                new_parts.extend(self.parts[i..fraction_start].iter().cloned());
+                            }
                             new_parts.push(fraction);
 
                             // Skip past all the parts we consumed
@@ -891,6 +939,7 @@ impl SectionBuilder {
                                 denom_digits.len() // Skip all denominator digit placeholders
                             };
                             i = denom_start + skip_count;
+                            fraction_ranges.push(fraction_start..i);
                             continue;
                         }
                     }
@@ -905,6 +954,7 @@ impl SectionBuilder {
         }
 
         self.parts = new_parts;
+        fraction_ranges
     }
 
     /// Detect and convert subsecond patterns in date formats.
@@ -999,7 +1049,7 @@ impl SectionBuilder {
         &self,
         end: usize,
         new_parts: &mut Vec<FormatPart>,
-    ) -> Vec<DigitPlaceholder> {
+    ) -> (Vec<DigitPlaceholder>, Option<usize>) {
         let mut int_digits = Vec::new();
 
         // Scan backwards from end to find digit placeholders
@@ -1038,16 +1088,18 @@ impl SectionBuilder {
         }
 
         // If we found integer digits, remove them from new_parts
-        if !int_digits.is_empty() && found_space {
+        let integer_start = if !int_digits.is_empty() && found_space {
             int_digits.reverse();
             // Remove parts from where integer starts
             let remove_from = (i + 1) as usize;
             new_parts.truncate(remove_from);
+            Some(remove_from)
         } else {
             int_digits.clear();
-        }
+            None
+        };
 
-        int_digits
+        (int_digits, integer_start)
     }
 }
 

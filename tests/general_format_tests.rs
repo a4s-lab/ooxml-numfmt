@@ -1,4 +1,4 @@
-use ooxml_numfmt::{format_default, NumberFormat};
+use ooxml_numfmt::{format_default, FormatOptions, NumberFormat};
 
 #[test]
 fn test_general_format_parse() {
@@ -165,4 +165,42 @@ fn test_text_format_uses_scientific_boundary() {
 
     assert_eq!(format_default(-484079807176.0, "@").unwrap(), "-4.8408E+11");
     assert_eq!(format_default(-100000000000.0, "@").unwrap(), "-1E+11");
+}
+
+#[test]
+fn test_general_is_rendered_at_source_position() {
+    let opts = FormatOptions::default();
+
+    let general = NumberFormat::parse("\"pre\"General\"post\"").unwrap();
+    assert_eq!(general.format(42.0, &opts), "pre42post");
+
+    let fill_before = NumberFormat::parse("\"pre\"*xGeneral\"post\"").unwrap();
+    assert_eq!(
+        fill_before.format_with_fill_count(42.0, &opts, 3),
+        "prexxx42post"
+    );
+    assert_eq!(
+        fill_before.format_with_fill_count(-42.0, &opts, 3),
+        "prexxx-42post"
+    );
+
+    let fill_after = NumberFormat::parse("\"pre\"General*x\"post\"").unwrap();
+    assert_eq!(
+        fill_after.format_with_fill_count(42.0, &opts, 3),
+        "pre42xxxpost"
+    );
+
+    let general_with_fill = NumberFormat::parse("General*x").unwrap();
+    assert_eq!(
+        general_with_fill.format_with_fill_count(42.0, &opts, 3),
+        "42xxx"
+    );
+}
+
+#[test]
+fn test_numeric_values_ignore_text_fill_section() {
+    let format = NumberFormat::parse("\"pre\"*x@\"post\"").unwrap();
+    let opts = FormatOptions::default();
+
+    assert_eq!(format.format_with_fill_count(42.0, &opts, 3), "42");
 }
