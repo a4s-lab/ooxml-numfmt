@@ -132,6 +132,16 @@ impl NumberFormat {
             return render::resolve_layout(&parts, 0);
         }
 
+        if plan.kind == SectionKind::Scientific {
+            let parts = number::evaluate_scientific(format_value, plan, opts)?;
+            return render::resolve_layout(&parts, 0);
+        }
+
+        if plan.kind == SectionKind::Fraction {
+            let parts = fraction::evaluate_fraction(format_value, plan, opts)?;
+            return render::resolve_layout(&parts, 0);
+        }
+
         // Format paths not yet migrated emit one semantic text fragment.
         let result = format_number(format_value, section, plan, opts)?;
         let mut parts = vec![render::RenderPart::Text(result)];

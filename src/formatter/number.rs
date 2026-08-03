@@ -1,7 +1,7 @@
 //! Number formatting (integers, decimals, percentages, scientific notation)
 
 use crate::ast::{DigitPlaceholder, FormatPart, Section};
-use crate::compile::{NumberSpec, SectionKind, SectionPlan};
+use crate::compile::{NumberPlaceholder, NumberSpec, ScientificSpec, SectionKind, SectionPlan};
 use crate::error::FormatError;
 use crate::options::FormatOptions;
 
@@ -29,6 +29,134 @@ pub(super) fn evaluate_number(
             _ => None,
         },
     ))
+}
+
+/// Evaluate a compiled scientific plan while retaining ordered layout anchors.
+pub(super) fn evaluate_scientific(
+    value: f64,
+    plan: &SectionPlan,
+    _opts: &FormatOptions,
+) -> Result<Vec<RenderPart>, FormatError> {
+    let spec = plan.scientific.as_ref().ok_or(FormatError::TypeMismatch {
+        expected: "compiled scientific format",
+        got: "non-scientific section",
+    })?;
+    let fields = prepare_scientific_fields(value, plan.operations.len(), spec);
+    let mut output = super::evaluate_operations(plan, |operation_index, part| match part {
+        FormatPart::Digit(_) | FormatPart::DecimalPoint | FormatPart::Scientific { .. } => {
+            fields[operation_index].clone()
+        }
+        FormatPart::Percent => Some("%".to_string()),
+        FormatPart::Locale(locale) => locale.currency.clone(),
+        _ => None,
+    });
+
+    if value < 0.0 {
+        output.insert(0, RenderPart::Text("-".to_string()));
+    }
+
+    Ok(output)
+}
+
+/// Prepare mantissa and exponent text for each scientific field operation.
+fn prepare_scientific_fields(
+    value: f64,
+    operation_count: usize,
+    spec: &ScientificSpec,
+) -> Vec<Option<String>> {
+    let mut adjusted = value.abs();
+    for _ in 0..spec.percent_count {
+        adjusted *= 100.0;
+    }
+
+    let integer_places = spec.mantissa_integer.len().max(1);
+    let decimal_places = spec.mantissa_decimal.len();
+    let (mantissa, exponent) = if adjusted == 0.0 {
+        (0.0, 0)
+    } else {
+        let base_exponent = adjusted.log10().floor() as i32;
+        let exponent = if integer_places > 1 {
+            ((base_exponent as f64) / (integer_places as f64)).floor() as i32
+                * integer_places as i32
+        } else {
+            base_exponent
+        };
+        (adjusted / 10_f64.powi(exponent), exponent)
+    };
+    let mantissa_text = if decimal_places > 0 {
+        format!("{mantissa:.decimal_places$}")
+    } else {
+        format!("{mantissa:.0}")
+    };
+    let (mantissa_integer, mantissa_decimal) = mantissa_text
+        .split_once('.')
+        .map_or((mantissa_text.as_str(), ""), |parts| parts);
+    let exponent_width = if adjusted == 0.0 || spec.exponent_digits.len() >= 2 {
+        2
+    } else {
+        1
+    };
+    let exponent_text = format!("{:0>width$}", exponent.abs(), width = exponent_width);
+    let exponent_marker = if spec.upper { 'E' } else { 'e' };
+    let exponent_sign = if exponent < 0 {
+        "-"
+    } else if spec.show_plus {
+        "+"
+    } else {
+        ""
+    };
+    let mut fields = vec![None; operation_count];
+
+    assign_right_aligned(mantissa_integer, &spec.mantissa_integer, &mut fields);
+    assign_left_aligned(mantissa_decimal, &spec.mantissa_decimal, &mut fields);
+    assign_right_aligned(&exponent_text, &spec.exponent_digits, &mut fields);
+    if let Some(operation_index) = spec.decimal_point_index {
+        if decimal_places > 0 {
+            fields[operation_index] = Some(".".to_string());
+        }
+    }
+    fields[spec.exponent_marker_index] = Some(format!("{exponent_marker}{exponent_sign}"));
+
+    fields
+}
+
+/// Assign text right-to-left across placeholder operations, keeping overflow leftmost.
+fn assign_right_aligned(
+    text: &str,
+    placeholders: &[NumberPlaceholder],
+    fields: &mut [Option<String>],
+) {
+    if placeholders.is_empty() {
+        return;
+    }
+
+    let characters: Vec<char> = text.chars().collect();
+    let extra = characters.len().saturating_sub(placeholders.len());
+    if extra > 0 {
+        fields[placeholders[0].operation_index] = Some(characters[..extra].iter().collect());
+    }
+
+    let placeholder_start = placeholders.len().saturating_sub(characters.len());
+    let character_start = characters.len().saturating_sub(placeholders.len());
+    for (placeholder, character) in placeholders[placeholder_start..]
+        .iter()
+        .zip(&characters[character_start..])
+    {
+        fields[placeholder.operation_index]
+            .get_or_insert_with(String::new)
+            .push(*character);
+    }
+}
+
+/// Assign text left-to-right across placeholder operations.
+fn assign_left_aligned(
+    text: &str,
+    placeholders: &[NumberPlaceholder],
+    fields: &mut [Option<String>],
+) {
+    for (placeholder, character) in placeholders.iter().zip(text.chars()) {
+        fields[placeholder.operation_index] = Some(character.to_string());
+    }
 }
 
 /// Prepare text for each numeric semantic operation in one value-specific pass.
@@ -464,7 +592,8 @@ pub fn format_number(
 
     // Check if this is a fraction format
     if plan.kind == SectionKind::Fraction {
-        return crate::formatter::fraction::format_fraction(value, section, opts);
+        let parts = crate::formatter::fraction::evaluate_fraction(value, plan, opts)?;
+        return super::render::resolve_layout(&parts, 0);
     }
 
     // Check if this is a text-only format
@@ -1141,6 +1270,19 @@ mod tests {
         assert_eq!(
             super::super::render::resolve_layout(&parts, 3).unwrap(),
             "4---2"
+        );
+    }
+
+    #[test]
+    fn preserves_fill_inside_scientific_fields() {
+        let format = crate::NumberFormat::parse("0.0*xE+00").unwrap();
+        let plan = &format.compiled.sections[0];
+        let options = FormatOptions::default();
+        let parts = evaluate_scientific(120.0, plan, &options).unwrap();
+
+        assert_eq!(
+            super::super::render::resolve_layout(&parts, 3).unwrap(),
+            "1.2xxxE+02"
         );
     }
 }

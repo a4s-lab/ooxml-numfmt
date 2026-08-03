@@ -1,9 +1,12 @@
 //! Fraction formatting
 
-use crate::ast::{DigitPlaceholder, FormatPart, FractionDenom, Section};
+use crate::ast::{DigitPlaceholder, FormatPart, FractionDenom};
+use crate::compile::{FractionSpec, SectionPlan};
 use crate::error::FormatError;
 use crate::formatter::number::format_simple_with_placeholders;
 use crate::options::FormatOptions;
+
+use super::render::RenderPart;
 
 /// Format a fraction part (numerator or denominator) with digit placeholders.
 /// Uses the unified placeholder formatting helper from number.rs.
@@ -11,47 +14,43 @@ fn format_fraction_part(value: u64, placeholders: &[DigitPlaceholder]) -> String
     format_simple_with_placeholders(value, placeholders)
 }
 
-/// Format a number as a fraction according to the format section.
-pub fn format_fraction(
+/// Evaluate a compiled fraction field without resolving surrounding layout.
+pub(super) fn evaluate_fraction(
     value: f64,
-    section: &Section,
+    plan: &SectionPlan,
     _opts: &FormatOptions,
-) -> Result<String, FormatError> {
-    // Find the fraction part in the section
-    let fraction_part = section.parts().iter().find_map(|p| {
-        if let FormatPart::Fraction {
-            integer_digits,
-            numerator_digits,
-            denominator,
-            space_before_slash,
-            space_after_slash,
-        } = p
-        {
-            Some((
-                integer_digits,
-                numerator_digits,
-                denominator,
-                space_before_slash,
-                space_after_slash,
-            ))
+) -> Result<Vec<RenderPart>, FormatError> {
+    let spec = plan.fraction.as_ref().ok_or(FormatError::TypeMismatch {
+        expected: "compiled fraction format",
+        got: "non-fraction section",
+    })?;
+    let formatted = format_fraction_value(value, spec);
+    let mut output = super::evaluate_operations(plan, |operation_index, part| {
+        if operation_index == spec.operation_index && matches!(part, FormatPart::Fraction { .. }) {
+            Some(formatted.clone())
         } else {
-            None
+            match part {
+                FormatPart::Locale(locale) => locale.currency.clone(),
+                FormatPart::Percent => Some("%".to_string()),
+                _ => None,
+            }
         }
     });
 
-    let Some((
-        integer_digits,
-        numerator_digits,
-        denominator,
-        space_before_slash,
-        space_after_slash,
-    )) = fraction_part
-    else {
-        return Err(FormatError::TypeMismatch {
-            expected: "fraction format",
-            got: "no fraction part found",
-        });
-    };
+    if value < 0.0 {
+        output.insert(0, RenderPart::Text("-".to_string()));
+    }
+
+    Ok(output)
+}
+
+/// Format the semantic fraction field from precompiled fraction properties.
+fn format_fraction_value(value: f64, spec: &FractionSpec) -> String {
+    let integer_digits = spec.integer_digits.as_ref();
+    let numerator_digits = spec.numerator_digits.as_ref();
+    let denominator = &spec.denominator;
+    let space_before_slash = spec.space_before_slash.as_ref();
+    let space_after_slash = spec.space_after_slash.as_ref();
 
     // Separate integer and fractional parts
     let abs_value = value.abs();
@@ -115,11 +114,6 @@ pub fn format_fraction(
 
     // Format the result
     let mut result = String::new();
-
-    // Add sign for negative values
-    if value < 0.0 {
-        result.push('-');
-    }
 
     // Format integer part (mixed fractions only)
     if is_mixed {
@@ -209,7 +203,7 @@ pub fn format_fraction(
         }
     }
 
-    Ok(result)
+    result
 }
 
 /// Find the best fraction approximation for a decimal value.
@@ -285,5 +279,17 @@ mod tests {
         // Test 2/3
         let (num, denom) = find_best_fraction(0.666666, 9);
         assert_eq!((num, denom), (2, 3));
+    }
+
+    #[test]
+    fn preserves_layout_around_fraction_fields() {
+        let format = crate::NumberFormat::parse("# ?/?*x").unwrap();
+        let plan = &format.compiled.sections[0];
+        let parts = evaluate_fraction(1.5, plan, &FormatOptions::default()).unwrap();
+
+        assert_eq!(
+            super::super::render::resolve_layout(&parts, 2).unwrap(),
+            "1 1/2xx"
+        );
     }
 }

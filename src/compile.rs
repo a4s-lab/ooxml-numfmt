@@ -1,6 +1,8 @@
 //! Immutable execution-plan compilation for normalized format syntax.
 
-use crate::ast::{Color, Condition, DatePart, DigitPlaceholder, FormatPart, Section};
+use crate::ast::{
+    Color, Condition, DatePart, DigitPlaceholder, FormatPart, FractionDenom, Section,
+};
 
 /// All compiled section plans owned by one number format.
 #[derive(Clone)]
@@ -33,6 +35,10 @@ pub(crate) struct SectionPlan {
     pub(crate) date: DateSpec,
     /// Standard-number properties derived during compilation.
     pub(crate) number: Option<NumberSpec>,
+    /// Scientific-notation properties derived during compilation.
+    pub(crate) scientific: Option<ScientificSpec>,
+    /// Fraction properties derived during compilation.
+    pub(crate) fraction: Option<FractionSpec>,
 }
 
 /// Semantic dispatch categories derived from section syntax.
@@ -100,6 +106,44 @@ pub(crate) struct NumberPlaceholder {
     pub(crate) placeholder: DigitPlaceholder,
 }
 
+/// Reusable scientific-notation field positions and display policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ScientificSpec {
+    /// Mantissa integer placeholders in operation order.
+    pub(crate) mantissa_integer: Box<[NumberPlaceholder]>,
+    /// Mantissa decimal placeholders in operation order.
+    pub(crate) mantissa_decimal: Box<[NumberPlaceholder]>,
+    /// Operation index of the mantissa decimal point.
+    pub(crate) decimal_point_index: Option<usize>,
+    /// Operation index of the exponent marker.
+    pub(crate) exponent_marker_index: usize,
+    /// Exponent digit placeholders in operation order.
+    pub(crate) exponent_digits: Box<[NumberPlaceholder]>,
+    /// Whether the exponent marker uses uppercase `E`.
+    pub(crate) upper: bool,
+    /// Whether nonnegative exponents include an explicit plus sign.
+    pub(crate) show_plus: bool,
+    /// Number of percent operations applied before scientific conversion.
+    pub(crate) percent_count: usize,
+}
+
+/// Reusable fraction semantics extracted from the normalized fraction node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FractionSpec {
+    /// Operation index at which the semantic fraction field is emitted.
+    pub(crate) operation_index: usize,
+    /// Digit placeholders for a mixed fraction's integer part.
+    pub(crate) integer_digits: Box<[DigitPlaceholder]>,
+    /// Digit placeholders for the numerator.
+    pub(crate) numerator_digits: Box<[DigitPlaceholder]>,
+    /// Fixed or maximum-width denominator policy.
+    pub(crate) denominator: FractionDenom,
+    /// Literal spacing immediately before the slash.
+    pub(crate) space_before_slash: Box<str>,
+    /// Literal spacing immediately after the slash.
+    pub(crate) space_after_slash: Box<str>,
+}
+
 /// Date properties that are stable for every evaluation of a section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DateSpec {
@@ -140,7 +184,99 @@ fn compile_section(section: &Section) -> SectionPlan {
         operations: section.parts().iter().map(compile_operation).collect(),
         date: compile_date_spec(section.parts()),
         number: (kind == SectionKind::Number).then(|| compile_number_spec(section.parts())),
+        scientific: (kind == SectionKind::Scientific)
+            .then(|| compile_scientific_spec(section.parts())),
+        fraction: (kind == SectionKind::Fraction).then(|| compile_fraction_spec(section.parts())),
     }
+}
+
+/// Compile scientific mantissa and exponent fields from normalized syntax.
+fn compile_scientific_spec(parts: &[FormatPart]) -> ScientificSpec {
+    let mut mantissa_integer = Vec::new();
+    let mut mantissa_decimal = Vec::new();
+    let mut exponent_digits = Vec::new();
+    let mut decimal_point_index = None;
+    let mut exponent_marker_index = None;
+    let mut upper = true;
+    let mut show_plus = false;
+    let mut after_decimal = false;
+    let mut after_exponent = false;
+
+    for (operation_index, part) in parts.iter().enumerate() {
+        match part {
+            FormatPart::Digit(placeholder) => {
+                let field = NumberPlaceholder {
+                    operation_index,
+                    placeholder: *placeholder,
+                };
+                if after_exponent {
+                    exponent_digits.push(field);
+                } else if after_decimal {
+                    mantissa_decimal.push(field);
+                } else {
+                    mantissa_integer.push(field);
+                }
+            }
+            FormatPart::DecimalPoint if !after_exponent => {
+                decimal_point_index = Some(operation_index);
+                after_decimal = true;
+            }
+            FormatPart::Scientific {
+                upper: part_upper,
+                show_plus: part_show_plus,
+            } => {
+                exponent_marker_index = Some(operation_index);
+                upper = *part_upper;
+                show_plus = *part_show_plus;
+                after_exponent = true;
+            }
+            _ => {}
+        }
+    }
+
+    ScientificSpec {
+        mantissa_integer: mantissa_integer.into_boxed_slice(),
+        mantissa_decimal: mantissa_decimal.into_boxed_slice(),
+        decimal_point_index,
+        exponent_marker_index: exponent_marker_index
+            .expect("scientific sections contain an exponent marker"),
+        exponent_digits: exponent_digits.into_boxed_slice(),
+        upper,
+        show_plus,
+        percent_count: parts
+            .iter()
+            .filter(|part| matches!(part, FormatPart::Percent))
+            .count(),
+    }
+}
+
+/// Compile the normalized fraction node into an immutable semantic spec.
+fn compile_fraction_spec(parts: &[FormatPart]) -> FractionSpec {
+    parts
+        .iter()
+        .enumerate()
+        .find_map(|(operation_index, part)| {
+            if let FormatPart::Fraction {
+                integer_digits,
+                numerator_digits,
+                denominator,
+                space_before_slash,
+                space_after_slash,
+            } = part
+            {
+                Some(FractionSpec {
+                    operation_index,
+                    integer_digits: integer_digits.clone().into_boxed_slice(),
+                    numerator_digits: numerator_digits.clone().into_boxed_slice(),
+                    denominator: *denominator,
+                    space_before_slash: space_before_slash.clone().into_boxed_str(),
+                    space_after_slash: space_after_slash.clone().into_boxed_str(),
+                })
+            } else {
+                None
+            }
+        })
+        .expect("fraction sections contain a normalized fraction node")
 }
 
 /// Compile standard-number placeholder behavior without a runtime value.
@@ -344,5 +480,20 @@ mod tests {
         assert!(number.use_thousands);
         assert_eq!(number.thousands_scale, 2);
         assert_eq!(number.percent_count, 1);
+    }
+
+    #[test]
+    fn compiles_scientific_and_fraction_specs() {
+        let scientific = plan("0.00E+00").scientific.unwrap();
+        assert_eq!(scientific.mantissa_integer.len(), 1);
+        assert_eq!(scientific.mantissa_decimal.len(), 2);
+        assert_eq!(scientific.exponent_digits.len(), 2);
+        assert!(scientific.upper);
+        assert!(scientific.show_plus);
+
+        let fraction = plan("# ?/?").fraction.unwrap();
+        assert_eq!(fraction.integer_digits.len(), 1);
+        assert_eq!(fraction.numerator_digits.len(), 1);
+        assert_eq!(fraction.denominator, FractionDenom::UpToDigits(1));
     }
 }
