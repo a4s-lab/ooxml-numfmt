@@ -124,6 +124,14 @@ impl NumberFormat {
             return render::resolve_layout(&parts, 0);
         }
 
+        if plan.kind == SectionKind::Number {
+            let mut parts = number::evaluate_number(format_value, plan, opts)?;
+            if need_minus_sign {
+                parts.insert(0, render::RenderPart::Text("-".to_string()));
+            }
+            return render::resolve_layout(&parts, 0);
+        }
+
         // Format paths not yet migrated emit one semantic text fragment.
         let result = format_number(format_value, section, plan, opts)?;
         let mut parts = vec![render::RenderPart::Text(result)];
@@ -317,7 +325,7 @@ impl NumberFormat {
 
 /// Evaluate General and literal-only numeric sections without resolving layout.
 fn evaluate_simple_number(plan: &SectionPlan, value: f64) -> Vec<render::RenderPart> {
-    evaluate_operations(plan, |part| match part {
+    evaluate_operations(plan, |_, part| match part {
         FormatPart::GeneralNumber => Some(fallback_format(value)),
         FormatPart::Locale(locale) => locale.currency.clone(),
         FormatPart::Percent => Some("%".to_string()),
@@ -328,17 +336,17 @@ fn evaluate_simple_number(plan: &SectionPlan, value: f64) -> Vec<render::RenderP
 /// Execute ordered operations while delegating semantic field evaluation.
 fn evaluate_operations(
     plan: &SectionPlan,
-    mut evaluate_semantic: impl FnMut(&FormatPart) -> Option<String>,
+    mut evaluate_semantic: impl FnMut(usize, &FormatPart) -> Option<String>,
 ) -> Vec<render::RenderPart> {
     let mut output = Vec::new();
 
-    for operation in &plan.operations {
+    for (operation_index, operation) in plan.operations.iter().enumerate() {
         match operation {
             Operation::Text(text) => render::push_text(&mut output, text.as_ref()),
             Operation::Fill(character) => output.push(render::RenderPart::Fill(*character)),
             Operation::Skip(character) => output.push(render::RenderPart::Skip(*character)),
             Operation::Semantic(part) => {
-                if let Some(text) = evaluate_semantic(part) {
+                if let Some(text) = evaluate_semantic(operation_index, part) {
                     render::push_text(&mut output, text);
                 }
             }

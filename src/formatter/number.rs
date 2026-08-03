@@ -1,9 +1,190 @@
 //! Number formatting (integers, decimals, percentages, scientific notation)
 
 use crate::ast::{DigitPlaceholder, FormatPart, Section};
-use crate::compile::{SectionKind, SectionPlan};
+use crate::compile::{NumberSpec, SectionKind, SectionPlan};
 use crate::error::FormatError;
 use crate::options::FormatOptions;
+
+use super::render::RenderPart;
+
+/// Evaluate a compiled standard-number plan without resolving layout directives.
+pub(super) fn evaluate_number(
+    value: f64,
+    plan: &SectionPlan,
+    opts: &FormatOptions,
+) -> Result<Vec<RenderPart>, FormatError> {
+    let spec = plan.number.as_ref().ok_or(FormatError::TypeMismatch {
+        expected: "compiled number format",
+        got: "non-number section",
+    })?;
+    let fields = prepare_number_fields(value, plan.operations.len(), spec, opts);
+
+    Ok(super::evaluate_operations(
+        plan,
+        |operation_index, part| match part {
+            FormatPart::Digit(_) | FormatPart::DecimalPoint => fields[operation_index].clone(),
+            FormatPart::ThousandsSeparator => None,
+            FormatPart::Percent => Some("%".to_string()),
+            FormatPart::Locale(locale) => locale.currency.clone(),
+            _ => None,
+        },
+    ))
+}
+
+/// Prepare text for each numeric semantic operation in one value-specific pass.
+fn prepare_number_fields(
+    value: f64,
+    operation_count: usize,
+    spec: &NumberSpec,
+    opts: &FormatOptions,
+) -> Vec<Option<String>> {
+    let mut fields = vec![None; operation_count];
+
+    // Preserve the integer-only path for safe exact values. This avoids f64
+    // precision loss while retaining SSF's separate integer evaluation behavior.
+    const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_992.0;
+    if value.fract() == 0.0
+        && value.abs() < MAX_SAFE_INTEGER
+        && spec.decimal_placeholders.is_empty()
+    {
+        let mut adjusted = (value as i64).unsigned_abs();
+        for _ in 0..spec.percent_count {
+            adjusted = adjusted.saturating_mul(100);
+        }
+        for _ in 0..spec.thousands_scale {
+            adjusted /= 1000;
+        }
+        prepare_integer_fields(adjusted, spec, opts, &mut fields);
+        return fields;
+    }
+
+    let mut adjusted = value.abs();
+    for _ in 0..spec.percent_count {
+        adjusted *= 100.0;
+    }
+    for _ in 0..spec.thousands_scale {
+        adjusted /= 1000.0;
+    }
+
+    // f64 has roughly 15 significant decimal digits, so larger requested
+    // precision cannot improve the rounded semantic value.
+    let effective_decimal_places = spec.decimal_places().min(15);
+    let multiplier = 10_f64.powi(effective_decimal_places as i32);
+    let rounded = (adjusted * multiplier).round() / multiplier;
+    prepare_integer_fields(rounded.trunc() as u64, spec, opts, &mut fields);
+    prepare_decimal_fields(rounded.fract(), spec, &mut fields);
+
+    if let Some(operation_index) = spec.decimal_point_index {
+        fields[operation_index] = Some(opts.locale.decimal_separator.to_string());
+    }
+
+    fields
+}
+
+/// Map integer digits, padding, and grouping to their source placeholders.
+fn prepare_integer_fields(
+    value: u64,
+    spec: &NumberSpec,
+    opts: &FormatOptions,
+    fields: &mut [Option<String>],
+) {
+    let placeholders = &spec.integer_placeholders;
+    if placeholders.is_empty() {
+        return;
+    }
+
+    let minimum_digits = placeholders
+        .iter()
+        .filter(|field| field.placeholder.is_required())
+        .count();
+    if value == 0 && minimum_digits == 0 {
+        return;
+    }
+
+    let value_digits: Vec<char> = value.to_string().chars().collect();
+    let output_len = if spec.use_thousands {
+        value_digits.len().max(minimum_digits)
+    } else {
+        value_digits.len().max(placeholders.len())
+    };
+    let extra_digits = output_len.saturating_sub(placeholders.len());
+    let active_placeholders = output_len.min(placeholders.len());
+    let first_placeholder = placeholders.len() - active_placeholders;
+
+    for logical_index in 0..output_len {
+        let placeholder_index = if logical_index < extra_digits {
+            0
+        } else {
+            first_placeholder + logical_index - extra_digits
+        };
+        let placeholder = placeholders[placeholder_index];
+        let value_index =
+            value_digits.len() as isize - output_len as isize + logical_index as isize;
+        let output = fields[placeholder.operation_index].get_or_insert_with(String::new);
+
+        if value_index >= 0 {
+            output.push(value_digits[value_index as usize]);
+        } else if let Some(character) = placeholder.placeholder.empty_char() {
+            output.push(character);
+        }
+
+        let remaining_positions = output_len - logical_index - 1;
+        if spec.use_thousands && remaining_positions > 0 && remaining_positions % 3 == 0 {
+            output.push(opts.locale.thousands_separator);
+        }
+    }
+}
+
+/// Map rounded fractional digits and optional padding to decimal placeholders.
+fn prepare_decimal_fields(value: f64, spec: &NumberSpec, fields: &mut [Option<String>]) {
+    let placeholders = &spec.decimal_placeholders;
+    if placeholders.is_empty() {
+        return;
+    }
+
+    // Match SSF by evaluating at most ten fractional digits before applying
+    // placeholder padding beyond that precision.
+    let effective_places = placeholders.len().min(10);
+    let multiplier = 10_f64.powi(effective_places as i32);
+    let decimal_integer = (value * multiplier).round() as u64;
+    let decimal_text = format!("{decimal_integer:0>effective_places$}");
+    let decimal_digits: Vec<char> = decimal_text.chars().collect();
+    let all_zeros = decimal_digits.iter().all(|character| *character == '0');
+    let mut trailing_zeros_start = if all_zeros { 0 } else { placeholders.len() };
+
+    if !all_zeros {
+        for index in (0..placeholders.len().min(effective_places)).rev() {
+            if decimal_digits.get(index) == Some(&'0') {
+                if !placeholders[index].placeholder.is_required() {
+                    trailing_zeros_start = index;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    for (index, field) in placeholders.iter().enumerate() {
+        let character = if index < effective_places {
+            decimal_digits.get(index).copied().unwrap_or('0')
+        } else {
+            match field.placeholder.empty_char() {
+                Some(character) => character,
+                None => continue,
+            }
+        };
+
+        if index >= trailing_zeros_start && character == '0' && !field.placeholder.is_required() {
+            if matches!(field.placeholder, DigitPlaceholder::Question) {
+                fields[field.operation_index] = Some(" ".to_string());
+            }
+        } else {
+            fields[field.operation_index] = Some(character.to_string());
+        }
+    }
+}
 
 /// Format a simple integer value with digit placeholders (no separators or literals).
 /// Based on SSF's write_num helper in bits/59_numhelp.js.
@@ -289,6 +470,11 @@ pub fn format_number(
     // Check if this is a text-only format
     if plan.kind == SectionKind::Text {
         return Ok(crate::formatter::fallback_format(value));
+    }
+
+    if plan.kind == SectionKind::Number {
+        let parts = evaluate_number(value, plan, opts)?;
+        return super::render::resolve_layout(&parts, 0);
     }
 
     // Check if section has any numeric placeholders
@@ -943,5 +1129,18 @@ mod tests {
 
         assert_eq!(analysis.percent_count, 1);
         assert_eq!(analysis.suffix_parts.len(), 1);
+    }
+
+    #[test]
+    fn preserves_fill_inside_numeric_placeholders() {
+        let format = crate::NumberFormat::parse("0*-0").unwrap();
+        let plan = &format.compiled.sections[0];
+        let options = FormatOptions::default();
+        let parts = evaluate_number(42.0, plan, &options).unwrap();
+
+        assert_eq!(
+            super::super::render::resolve_layout(&parts, 3).unwrap(),
+            "4---2"
+        );
     }
 }

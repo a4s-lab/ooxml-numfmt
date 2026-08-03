@@ -1,6 +1,6 @@
 //! Immutable execution-plan compilation for normalized format syntax.
 
-use crate::ast::{Color, Condition, DatePart, FormatPart, Section};
+use crate::ast::{Color, Condition, DatePart, DigitPlaceholder, FormatPart, Section};
 
 /// All compiled section plans owned by one number format.
 #[derive(Clone)]
@@ -31,6 +31,8 @@ pub(crate) struct SectionPlan {
     pub(crate) operations: Box<[Operation]>,
     /// Date and time properties derived during compilation.
     pub(crate) date: DateSpec,
+    /// Standard-number properties derived during compilation.
+    pub(crate) number: Option<NumberSpec>,
 }
 
 /// Semantic dispatch categories derived from section syntax.
@@ -65,6 +67,39 @@ pub(crate) enum Operation {
     Semantic(FormatPart),
 }
 
+/// Reusable numeric placeholder analysis for standard numbers and BigInt values.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct NumberSpec {
+    /// Integer placeholders paired with their ordered operation indices.
+    pub(crate) integer_placeholders: Box<[NumberPlaceholder]>,
+    /// Decimal placeholders paired with their ordered operation indices.
+    pub(crate) decimal_placeholders: Box<[NumberPlaceholder]>,
+    /// Operation index of the decimal separator, when present.
+    pub(crate) decimal_point_index: Option<usize>,
+    /// Whether dynamic thousands grouping is enabled.
+    pub(crate) use_thousands: bool,
+    /// Number of trailing commas that scale the value by one thousand.
+    pub(crate) thousands_scale: usize,
+    /// Number of percent operations that each multiply the value by one hundred.
+    pub(crate) percent_count: usize,
+}
+
+impl NumberSpec {
+    /// Return the number of configured decimal placeholder positions.
+    pub(crate) fn decimal_places(&self) -> usize {
+        self.decimal_placeholders.len()
+    }
+}
+
+/// One numeric placeholder and its position in the section operation stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NumberPlaceholder {
+    /// Index of the corresponding semantic operation.
+    pub(crate) operation_index: usize,
+    /// Placeholder behavior for missing digits.
+    pub(crate) placeholder: DigitPlaceholder,
+}
+
 /// Date properties that are stable for every evaluation of a section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DateSpec {
@@ -97,12 +132,73 @@ pub(crate) enum TimeUnit {
 
 /// Compile one normalized syntax section into immutable execution data.
 fn compile_section(section: &Section) -> SectionPlan {
+    let kind = classify_section(section.parts());
     SectionPlan {
         condition: section.condition(),
         color: section.color(),
-        kind: classify_section(section.parts()),
+        kind,
         operations: section.parts().iter().map(compile_operation).collect(),
         date: compile_date_spec(section.parts()),
+        number: (kind == SectionKind::Number).then(|| compile_number_spec(section.parts())),
+    }
+}
+
+/// Compile standard-number placeholder behavior without a runtime value.
+fn compile_number_spec(parts: &[FormatPart]) -> NumberSpec {
+    let trailing_comma_count = parts
+        .iter()
+        .rev()
+        .take_while(|part| !matches!(part, FormatPart::Digit(_) | FormatPart::DecimalPoint))
+        .filter(|part| matches!(part, FormatPart::ThousandsSeparator))
+        .count();
+    let total_comma_count = parts
+        .iter()
+        .filter(|part| matches!(part, FormatPart::ThousandsSeparator))
+        .count();
+    let grouping_comma_count = total_comma_count.saturating_sub(trailing_comma_count);
+    let mut integer_placeholders = Vec::new();
+    let mut decimal_placeholders = Vec::new();
+    let mut decimal_point_index = None;
+    let mut after_decimal = false;
+
+    for (operation_index, part) in parts.iter().enumerate() {
+        match part {
+            FormatPart::Digit(placeholder) => {
+                let compiled = NumberPlaceholder {
+                    operation_index,
+                    placeholder: *placeholder,
+                };
+                if after_decimal {
+                    decimal_placeholders.push(compiled);
+                } else {
+                    integer_placeholders.push(compiled);
+                }
+            }
+            FormatPart::DecimalPoint if decimal_point_index.is_none() => {
+                decimal_point_index = Some(operation_index);
+                after_decimal = true;
+            }
+            _ => {}
+        }
+    }
+
+    if integer_placeholders.is_empty() && decimal_point_index.is_none() {
+        integer_placeholders.push(NumberPlaceholder {
+            operation_index: 0,
+            placeholder: DigitPlaceholder::Hash,
+        });
+    }
+
+    NumberSpec {
+        integer_placeholders: integer_placeholders.into_boxed_slice(),
+        decimal_placeholders: decimal_placeholders.into_boxed_slice(),
+        decimal_point_index,
+        use_thousands: grouping_comma_count > 0,
+        thousands_scale: trailing_comma_count,
+        percent_count: parts
+            .iter()
+            .filter(|part| matches!(part, FormatPart::Percent))
+            .count(),
     }
 }
 
@@ -236,5 +332,17 @@ mod tests {
         )]);
 
         assert_eq!(parsed.compiled.sections, programmatic.compiled.sections);
+    }
+
+    #[test]
+    fn compiles_standard_number_semantics_once() {
+        let compiled = plan("#,##0.00%,,");
+        let number = compiled.number.unwrap();
+
+        assert_eq!(number.integer_placeholders.len(), 4);
+        assert_eq!(number.decimal_places(), 2);
+        assert!(number.use_thousands);
+        assert_eq!(number.thousands_scale, 2);
+        assert_eq!(number.percent_count, 1);
     }
 }

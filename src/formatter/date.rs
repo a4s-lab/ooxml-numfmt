@@ -117,7 +117,7 @@ pub(super) fn evaluate_date(
     let weekday = serial_to_weekday(value, opts.date_system);
 
     // Evaluate semantic fields while the common executor retains layout operations.
-    Ok(super::evaluate_operations(plan, |part| match part {
+    Ok(super::evaluate_operations(plan, |_, part| match part {
         FormatPart::DatePart(date_part) => Some(format_date_part(
             *date_part,
             year,
