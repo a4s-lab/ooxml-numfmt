@@ -14,7 +14,7 @@ pub use number::format_number;
 #[allow(unused_imports)]
 pub use bigint::{fallback_format_bigint, format_bigint, is_safe_integer};
 
-use crate::ast::{FormatPart, NumberFormat};
+use crate::ast::{FormatPart, NumberFormat, Section};
 use crate::error::FormatError;
 use crate::options::FormatOptions;
 
@@ -185,15 +185,8 @@ impl NumberFormat {
     }
 
     /// Format a text value using this format code.
-    ///
-    /// If this format has a text section (4th section), it will be used.
-    /// Otherwise, the text is returned as-is.
     pub fn format_text(&self, text: &str, _opts: &FormatOptions) -> String {
-        let sections = self.sections();
-
-        // Text section is the 4th section if present
-        if sections.len() >= 4 {
-            let text_section = &sections[3];
+        if let Some(text_section) = self.select_text_section() {
             let mut result = String::new();
 
             for part in &text_section.parts {
@@ -204,11 +197,29 @@ impl NumberFormat {
                 }
             }
 
-            return result;
+            result
+        } else {
+            // Default: return text as-is
+            text.to_string()
+        }
+    }
+
+    /// Selects the text section with the following policy:
+    /// - If the 4th section is present, always return it.
+    /// - With fewer sections, use the final section only if it contains `@`.
+    /// - Otherwise, return None.
+    fn select_text_section(&self) -> Option<&Section> {
+        let sections = self.sections();
+
+        // Text section is the 4th section if present
+        if sections.len() >= 4 {
+            return Some(&sections[3]);
         }
 
-        // Default: return text as-is
-        text.to_string()
+        // With fewer sections, the final section is the text section only if it contains `@`.
+        sections
+            .last()
+            .filter(|section| section.has_text_placeholder())
     }
 
     /// Format a BigInt value using this format code (requires `bigint` feature).
@@ -509,5 +520,45 @@ mod tests {
 
         let opts = FormatOptions::default();
         assert_eq!(fmt.format_text("hello", &opts), "<<hello>>");
+    }
+
+    #[test]
+    fn test_format_text_with_placeholder_in_single_section() {
+        let fmt = NumberFormat::parse("\"pre\"@\"post\"").unwrap();
+        let opts = FormatOptions::default();
+
+        assert_eq!(fmt.format_text("hello", &opts), "prehellopost");
+    }
+
+    #[test]
+    fn test_format_text_with_placeholder_in_second_section() {
+        let fmt = NumberFormat::parse("0;\"pre\"@").unwrap();
+        let opts = FormatOptions::default();
+
+        assert_eq!(fmt.format_text("hello", &opts), "prehello");
+    }
+
+    #[test]
+    fn test_format_text_with_placeholder_in_third_section() {
+        let fmt = NumberFormat::parse("0;0;\"pre\"@").unwrap();
+        let opts = FormatOptions::default();
+
+        assert_eq!(fmt.format_text("hello", &opts), "prehello");
+    }
+
+    #[test]
+    fn test_format_text_with_literal_only_fourth_section() {
+        let fmt = NumberFormat::parse("0;0;0;\"literal\"").unwrap();
+        let opts = FormatOptions::default();
+
+        assert_eq!(fmt.format_text("hello", &opts), "literal");
+    }
+
+    #[test]
+    fn test_format_text_with_explicitly_empty_fourth_section() {
+        let fmt = NumberFormat::parse("0;0;0;").unwrap();
+        let opts = FormatOptions::default();
+
+        assert_eq!(fmt.format_text("hello", &opts), "");
     }
 }
