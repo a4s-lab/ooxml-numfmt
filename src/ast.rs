@@ -1,6 +1,8 @@
 //! AST types for parsed format codes.
 
+use crate::compile::CompiledFormat;
 use crate::error::ParseError;
+use std::fmt;
 use std::str::FromStr;
 
 /// Named colors supported in format codes.
@@ -284,124 +286,6 @@ impl FormatPart {
     }
 }
 
-/// Smallest time unit displayed in a format (used for pre-rounding).
-/// Based on SSF's `bt` variable in bits/82_eval.js
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum TimeUnit {
-    /// No time components in format
-    None,
-    /// Hours is the smallest unit (round to nearest minute)
-    Hours,
-    /// Minutes is the smallest unit (round to nearest second)
-    Minutes,
-    /// Seconds is the smallest unit (round to nearest subsecond)
-    Seconds,
-    /// Subseconds displayed (no rounding needed)
-    Subseconds,
-}
-
-/// Type of format for optimization and dispatch
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FormatType {
-    /// General number format or mixed
-    General,
-    /// Date/time format
-    DateTime,
-    /// Pure number format
-    Number,
-    /// Fraction format
-    Fraction,
-    /// Text format
-    Text,
-}
-
-/// Pre-computed metadata about a section to avoid repeated scanning
-#[derive(Debug, Clone, PartialEq)]
-pub struct SectionMetadata {
-    /// True if format contains AM/PM indicator
-    pub has_ampm: bool,
-    /// True if format uses Hijri calendar (B2 prefix)
-    pub is_hijri: bool,
-    /// Maximum subsecond precision (e.g., 3 for .000)
-    pub max_subsecond_precision: Option<u8>,
-    /// True if format contains elapsed time components (`[h]`, `[m]`, `[s]`)
-    pub has_elapsed_time: bool,
-    /// Smallest time unit displayed (for pre-rounding)
-    pub smallest_time_unit: TimeUnit,
-    /// Primary format type
-    pub format_type: FormatType,
-}
-
-impl Default for SectionMetadata {
-    fn default() -> Self {
-        Self {
-            has_ampm: false,
-            is_hijri: false,
-            max_subsecond_precision: None,
-            has_elapsed_time: false,
-            smallest_time_unit: TimeUnit::None,
-            format_type: FormatType::General,
-        }
-    }
-}
-
-impl SectionMetadata {
-    /// Derive section metadata from normalized syntax parts.
-    fn from_parts(parts: &[FormatPart]) -> Self {
-        let mut metadata = Self::default();
-
-        for part in parts {
-            match part {
-                FormatPart::AmPm(_) => metadata.has_ampm = true,
-                FormatPart::DatePart(DatePart::BuddhistYear4Alt | DatePart::BuddhistYear2Alt) => {
-                    metadata.is_hijri = true
-                }
-                FormatPart::DatePart(DatePart::SubSecond(precision)) => {
-                    metadata.max_subsecond_precision = Some(
-                        metadata
-                            .max_subsecond_precision
-                            .unwrap_or(0)
-                            .max(*precision),
-                    );
-                    metadata.smallest_time_unit = TimeUnit::Subseconds;
-                }
-                FormatPart::DatePart(DatePart::Second | DatePart::Second2) => {
-                    metadata.smallest_time_unit =
-                        metadata.smallest_time_unit.max(TimeUnit::Seconds);
-                }
-                FormatPart::DatePart(DatePart::Minute | DatePart::Minute2) => {
-                    metadata.smallest_time_unit =
-                        metadata.smallest_time_unit.max(TimeUnit::Minutes);
-                }
-                FormatPart::DatePart(DatePart::Hour | DatePart::Hour2) => {
-                    metadata.smallest_time_unit = metadata.smallest_time_unit.max(TimeUnit::Hours);
-                }
-                FormatPart::Elapsed(_) => metadata.has_elapsed_time = true,
-                FormatPart::Fraction { .. } => metadata.format_type = FormatType::Fraction,
-                FormatPart::TextPlaceholder => metadata.format_type = FormatType::Text,
-                _ => {}
-            }
-        }
-
-        if metadata.format_type == FormatType::General {
-            let has_date = parts
-                .iter()
-                .any(|part| matches!(part, FormatPart::DatePart(_)));
-            let has_number = parts
-                .iter()
-                .any(|part| matches!(part, FormatPart::Digit(_) | FormatPart::DecimalPoint));
-
-            if has_date || metadata.has_ampm || metadata.has_elapsed_time {
-                metadata.format_type = FormatType::DateTime;
-            } else if has_number {
-                metadata.format_type = FormatType::Number;
-            }
-        }
-
-        metadata
-    }
-}
-
 /// A single section of a format code.
 ///
 /// Format codes can have up to 4 sections:
@@ -417,19 +301,15 @@ pub struct Section {
     color: Option<Color>,
     /// The format parts that make up this section
     parts: Vec<FormatPart>,
-    /// Pre-computed metadata to avoid repeated scanning
-    pub(crate) metadata: SectionMetadata,
 }
 
 impl Section {
     /// Create a section from optional selectors and normalized syntax parts.
     pub fn new(condition: Option<Condition>, color: Option<Color>, parts: Vec<FormatPart>) -> Self {
-        let metadata = SectionMetadata::from_parts(&parts);
         Self {
             condition,
             color,
             parts,
-            metadata,
         }
     }
 
@@ -472,9 +352,25 @@ impl Section {
 ///
 /// This is the main type returned by parsing. It can be reused to format
 /// multiple values efficiently.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone)]
 pub struct NumberFormat {
-    sections: Vec<Section>,
+    sections: Box<[Section]>,
+    pub(crate) compiled: CompiledFormat,
+}
+
+impl PartialEq for NumberFormat {
+    fn eq(&self, other: &Self) -> bool {
+        self.sections == other.sections
+    }
+}
+
+impl fmt::Debug for NumberFormat {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("NumberFormat")
+            .field("sections", &self.sections)
+            .finish()
+    }
 }
 
 impl NumberFormat {
@@ -486,7 +382,9 @@ impl NumberFormat {
         } else {
             sections
         };
-        NumberFormat { sections }
+        let sections = sections.into_boxed_slice();
+        let compiled = CompiledFormat::new(&sections);
+        NumberFormat { sections, compiled }
     }
 
     /// Get the sections of this format.
@@ -496,12 +394,16 @@ impl NumberFormat {
 
     /// Returns true if this format contains date/time parts.
     pub fn is_date_format(&self) -> bool {
-        self.sections.iter().any(|s| s.has_date_parts())
+        self.compiled
+            .sections
+            .iter()
+            .any(|plan| plan.kind == crate::compile::SectionKind::DateTime)
     }
 
     /// Returns true if this is a text-only format.
     pub fn is_text_format(&self) -> bool {
-        self.sections.len() == 1 && self.sections[0].has_text_placeholder()
+        self.compiled.sections.len() == 1
+            && self.compiled.sections[0].kind == crate::compile::SectionKind::Text
     }
 
     /// Returns true if this format contains a percent sign.
@@ -511,12 +413,18 @@ impl NumberFormat {
 
     /// Returns true if any section has a color.
     pub fn has_color(&self) -> bool {
-        self.sections.iter().any(|s| s.color().is_some())
+        self.compiled
+            .sections
+            .iter()
+            .any(|plan| plan.color.is_some())
     }
 
     /// Returns true if any section has a condition.
     pub fn has_condition(&self) -> bool {
-        self.sections.iter().any(|s| s.condition().is_some())
+        self.compiled
+            .sections
+            .iter()
+            .any(|plan| plan.condition.is_some())
     }
 
     /// Parse a format code string into a NumberFormat.

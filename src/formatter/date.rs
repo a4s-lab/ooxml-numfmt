@@ -1,6 +1,7 @@
 //! Date and time formatting
 
 use crate::ast::{AmPmStyle, DatePart, ElapsedPart, FormatPart, Section};
+use crate::compile::{SectionPlan, TimeUnit};
 use crate::date_serial::{serial_to_date, serial_to_weekday};
 use crate::error::FormatError;
 use crate::locale::Locale;
@@ -10,6 +11,7 @@ use crate::options::FormatOptions;
 pub fn format_date(
     value: f64,
     section: &Section,
+    plan: &SectionPlan,
     opts: &FormatOptions,
 ) -> Result<String, FormatError> {
     // SSF returns empty string for out-of-range dates (< 0 or > 2958465)
@@ -18,10 +20,9 @@ pub fn format_date(
         return Ok(String::new());
     }
 
-    // Use pre-computed metadata instead of scanning parts
-    // Metadata is computed once during parsing for better performance
-    let is_hijri = section.metadata.is_hijri;
-    let has_ampm = section.metadata.has_ampm;
+    // Date properties are compiled once instead of rescanned for every value.
+    let is_hijri = plan.date.is_hijri;
+    let has_ampm = plan.date.has_ampm;
 
     // Check if there are multiple SubSecond parts (still need to scan for this specific case)
     let has_multiple_subseconds = section
@@ -80,7 +81,7 @@ pub fn format_date(
 
     // Get time components
     // Only round seconds when there's no subsecond display in the format
-    let has_subseconds = section.metadata.max_subsecond_precision.is_some();
+    let has_subseconds = plan.date.max_subsecond_precision.is_some();
     let (mut hour, mut minute, mut second) =
         crate::date_serial::serial_to_time_with_rounding(adjusted_value, !has_subseconds);
 
@@ -99,8 +100,8 @@ pub fn format_date(
             &mut minute,
             &mut second,
             subseconds,
-            section.metadata.smallest_time_unit,
-            section.metadata.max_subsecond_precision,
+            plan.date.smallest_time_unit,
+            plan.date.max_subsecond_precision,
         );
     }
 
@@ -338,11 +339,9 @@ fn apply_time_prerounding(
     minute: &mut u32,
     second: &mut u32,
     subseconds: f64,
-    smallest_unit: crate::ast::TimeUnit,
+    smallest_unit: TimeUnit,
     subsecond_precision: Option<u8>,
 ) {
-    use crate::ast::TimeUnit;
-
     match smallest_unit {
         TimeUnit::Hours => {
             // Round subseconds -> seconds -> minutes -> hours

@@ -1,6 +1,7 @@
 //! Number formatting (integers, decimals, percentages, scientific notation)
 
 use crate::ast::{DigitPlaceholder, FormatPart, Section};
+use crate::compile::{SectionKind, SectionPlan};
 use crate::error::FormatError;
 use crate::options::FormatOptions;
 
@@ -264,6 +265,7 @@ pub fn analyze_format(section: &Section) -> FormatAnalysis {
 pub fn format_number(
     value: f64,
     section: &Section,
+    plan: &SectionPlan,
     opts: &FormatOptions,
 ) -> Result<String, FormatError> {
     // Check if this is scientific notation
@@ -279,21 +281,18 @@ pub fn format_number(
         return format_scientific(value, section, upper, show_plus, opts);
     }
 
-    // Use pre-computed format type from metadata for better performance
-    use crate::ast::FormatType;
-
     // Check if this is a fraction format
-    if section.metadata.format_type == FormatType::Fraction {
+    if plan.kind == SectionKind::Fraction {
         return crate::formatter::fraction::format_fraction(value, section, opts);
     }
 
     // Check if this is a text-only format
-    if section.metadata.format_type == FormatType::Text {
+    if plan.kind == SectionKind::Text {
         return Ok(crate::formatter::fallback_format(value));
     }
 
     // Check if section has any numeric placeholders
-    let has_numeric_parts = section.metadata.format_type == FormatType::Number
+    let has_numeric_parts = plan.kind == SectionKind::Number
         || section
             .parts()
             .iter()

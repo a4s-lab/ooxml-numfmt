@@ -5,6 +5,7 @@
 //! For values outside the safe range, string-based arithmetic is used to preserve precision.
 
 use crate::ast::{FormatPart, Section};
+use crate::compile::SectionPlan;
 use crate::error::FormatError;
 use crate::options::FormatOptions;
 use num_bigint::BigInt;
@@ -28,13 +29,14 @@ pub fn is_safe_integer(n: &BigInt) -> bool {
 pub fn format_bigint(
     value: &BigInt,
     section: &Section,
+    plan: &SectionPlan,
     opts: &FormatOptions,
 ) -> Result<String, FormatError> {
     // Check if value is within safe f64 range
     if is_safe_integer(value) {
         // Convert to f64 and use standard formatting
         let float_val: f64 = value.to_string().parse().unwrap_or(0.0);
-        return super::format_number(float_val, section, opts);
+        return super::format_number(float_val, section, plan, opts);
     }
 
     // For large integers, use string-based formatting

@@ -15,6 +15,7 @@ pub use number::format_number;
 pub use bigint::{fallback_format_bigint, format_bigint, is_safe_integer};
 
 use crate::ast::{FormatPart, NumberFormat, Section};
+use crate::compile::SectionKind;
 use crate::error::FormatError;
 use crate::options::FormatOptions;
 
@@ -50,14 +51,20 @@ impl NumberFormat {
 
         // Select the appropriate section based on value
         let sections = self.sections();
-        let section = &sections[self.select_section_index(value)];
+        let section_index = self.select_section_index(value);
+        let section = &sections[section_index];
+        let plan = &self.compiled.sections[section_index];
 
         // Excel behavior: when a conditional section strictly matches, format using absolute value
         // Use absolute value only when the condition is strictly satisfied (not at boundary)
-        let has_conditions = sections.iter().any(|s| s.condition().is_some());
+        let has_conditions = self
+            .compiled
+            .sections
+            .iter()
+            .any(|plan| plan.condition.is_some());
         let use_abs_value = has_conditions
-            && section.condition().is_some()
-            && section.condition().unwrap().is_strict_match(value);
+            && plan.condition.is_some()
+            && plan.condition.unwrap().is_strict_match(value);
         let format_value = if use_abs_value { value.abs() } else { value };
 
         // Handle "General" format (empty section with no parts)
@@ -75,8 +82,8 @@ impl NumberFormat {
         }
 
         // Check if this is a date format
-        if section.has_date_parts() {
-            return date::format_date(format_value, section, opts);
+        if plan.kind == SectionKind::DateTime {
+            return date::format_date(format_value, section, plan, opts);
         }
 
         // Determine if we need to add a minus sign
@@ -105,7 +112,7 @@ impl NumberFormat {
             && !has_scientific;
 
         // Format as a number
-        let mut result = format_number(format_value, section, opts)?;
+        let mut result = format_number(format_value, section, plan, opts)?;
 
         // Add minus sign for single-section formats with negative values
         // Note: format_number uses abs(value), so it never includes the minus sign
@@ -125,15 +132,15 @@ impl NumberFormat {
     /// - 3 sections: positive, negative, zero
     /// - 4 sections: positive, negative, zero, text
     pub fn select_section_index(&self, value: f64) -> usize {
-        let sections = self.sections();
+        let plans = &self.compiled.sections;
 
         // Check if any section has conditions
-        let has_conditions = sections.iter().any(|s| s.condition().is_some());
+        let has_conditions = plans.iter().any(|plan| plan.condition.is_some());
 
         if has_conditions {
             // With conditions: find matching conditional, or first non-conditional
-            for (index, section) in sections.iter().enumerate() {
-                if let Some(condition) = section.condition() {
+            for (index, plan) in plans.iter().enumerate() {
+                if let Some(condition) = plan.condition {
                     if condition.evaluate(value) {
                         return index;
                     }
@@ -143,11 +150,11 @@ impl NumberFormat {
                 }
             }
             // Fallback to last section if nothing matched
-            return sections.len() - 1;
+            return plans.len() - 1;
         }
 
         // Standard section selection based on value sign (no conditions)
-        match sections.len() {
+        match plans.len() {
             0 => unreachable!("NumberFormat should always have at least one section"),
             1 => 0,
             2 => {
@@ -165,8 +172,8 @@ impl NumberFormat {
                 } else {
                     // Zero value - use section[2]
                     // Unless it's text-only (@), then use positive section
-                    if sections[2].has_text_placeholder()
-                        && !sections[2].parts().iter().any(|p| {
+                    if plans[2].kind == SectionKind::Text
+                        && !self.sections()[2].parts().iter().any(|p| {
                             p.is_numeric_part()
                                 || matches!(
                                     p,
@@ -283,7 +290,13 @@ impl NumberFormat {
         }
 
         // Format using BigInt-specific logic
-        let mut result = bigint::format_bigint(value, section, opts)?;
+        let section_index = if is_negative && self.sections().len() >= 2 {
+            1
+        } else {
+            0
+        };
+        let mut result =
+            bigint::format_bigint(value, section, &self.compiled.sections[section_index], opts)?;
 
         // Add minus sign for negative values in single-section formats
         let sections = self.sections();

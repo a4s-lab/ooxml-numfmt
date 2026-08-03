@@ -57,6 +57,7 @@ pub mod date_serial;
 mod hijri;
 
 mod cache;
+mod compile;
 mod formatter;
 mod locale;
 pub mod parser;
