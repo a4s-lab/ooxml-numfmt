@@ -1,6 +1,6 @@
 # ooxml-numfmt
 
-Excel-compatible ECMA-376 number format codes for Rust, forked from [ssfmt](https://github.com/ketbra/ssfmt).
+Excel-compatible ECMA-376 number format codes for Rust, inspired by [ssfmt](https://github.com/ketbra/ssfmt).
 
 ## Features
 
