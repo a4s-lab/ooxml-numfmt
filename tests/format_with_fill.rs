@@ -18,6 +18,17 @@ fn format_with_fill(code: &str, value: f64, fill_count: usize) -> String {
     NumberFormat::parse(code).unwrap().format(value, &options)
 }
 
+/// Format a text value with an explicit fill repetition count.
+fn format_text_with_fill(code: &str, value: &str, fill_count: usize) -> String {
+    let options = FormatOptions {
+        fill_count,
+        ..FormatOptions::default()
+    };
+    NumberFormat::parse(code)
+        .unwrap()
+        .format_text(value, &options)
+}
+
 #[test]
 fn test_skip_resolution_always_be_one_space() {
     assert_eq!(format_default("yyyy_)", 46031.0), "2026 ");
@@ -196,6 +207,40 @@ fn test_fill_accounting() {
     assert_eq!(
         format_with_fill("_($* #,##0.00_)", 1234.56, 3),
         " $   1,234.56 "
+    );
+}
+
+#[test]
+fn test_fill_text() {
+    assert_eq!(
+        format_text_with_fill("@*-", "first\nsecond", 3),
+        "first---\nsecond"
+    );
+    assert_eq!(
+        format_text_with_fill("*-@", "first\nsecond", 3),
+        "---first\nsecond"
+    );
+    assert_eq!(
+        format_text_with_fill("@\"!\"*-", "first\nsecond", 3),
+        "first---\nsecond!"
+    );
+    assert_eq!(format_text_with_fill("@*-", "first", 3), "first---");
+    assert_eq!(
+        format_text_with_fill("@\"!\"*-", "first\nsecond", 0),
+        "first\nsecond!"
+    );
+    assert_eq!(
+        format_text_with_fill("@*-", "first\r\nsecond", 3),
+        "first---\r\nsecond"
+    );
+    assert_eq!(
+        format_text_with_fill("0@*-", "first\nsecond", 3),
+        "first---\nsecond"
+    );
+    assert_eq!(format_text_with_fill("@@*-", "a\nb", 3), "a\nba\nb---");
+    assert_eq!(
+        format_text_with_fill("@@*-", "a\r\nb", 3),
+        "a\r\nba\r\nb---"
     );
 }
 

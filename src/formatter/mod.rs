@@ -328,19 +328,34 @@ fn evaluate_operations(
     let mut output = Vec::new();
 
     for (operation_index, operation) in plan.operations.iter().enumerate() {
-        match operation {
-            Operation::Text(text) => render::push_text(&mut output, text.as_ref()),
-            Operation::Fill(character) => output.push(render::RenderPart::Fill(*character)),
-            Operation::Skip(character) => output.push(render::RenderPart::Skip(*character)),
-            Operation::Semantic(part) => {
-                if let Some(text) = evaluate_semantic(operation_index, part) {
-                    render::push_text(&mut output, text);
-                }
-            }
-        }
+        evaluate_operation(
+            &mut output,
+            operation_index,
+            operation,
+            &mut evaluate_semantic,
+        );
     }
 
     output
+}
+
+/// Evaluate one compiled operation into ordered unresolved render parts.
+fn evaluate_operation(
+    output: &mut Vec<render::RenderPart>,
+    operation_index: usize,
+    operation: &Operation,
+    evaluate_semantic: &mut impl FnMut(usize, &FormatPart) -> Option<String>,
+) {
+    match operation {
+        Operation::Text(text) => render::push_text(output, text.as_ref()),
+        Operation::Fill(character) => output.push(render::RenderPart::Fill(*character)),
+        Operation::Skip(character) => output.push(render::RenderPart::Skip(*character)),
+        Operation::Semantic(part) => {
+            if let Some(text) = evaluate_semantic(operation_index, part) {
+                render::push_text(output, text);
+            }
+        }
+    }
 }
 
 /// Fallback formatting for when the format code cannot be applied.
