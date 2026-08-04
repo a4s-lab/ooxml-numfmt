@@ -235,7 +235,7 @@ impl NumberFormat {
     /// - If the 4th section is present, always return it.
     /// - With fewer sections, use the final section only if it contains `@`.
     /// - Otherwise, return None.
-    fn select_text_section_index(&self) -> Option<usize> {
+    pub fn select_text_section_index(&self) -> Option<usize> {
         let sections = self.sections();
 
         // Text section is the 4th section if present
