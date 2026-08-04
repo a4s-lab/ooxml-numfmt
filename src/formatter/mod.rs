@@ -94,25 +94,16 @@ impl NumberFormat {
         // For multi-section formats, the section handles it
         // For literal-only formats (no numeric parts), add minus ONLY if it's a single unescaped single-char literal
         // But NOT if we're using absolute value due to conditional matching
-        // EXCEPTION: Fraction and scientific notation formats add their own minus sign
+        // Scientific notation retains its specialized sign path until its own refactor.
         let num_sections = sections.len();
         let has_numeric_parts = section.parts().iter().any(|p| p.is_numeric_part());
         let is_single_char_literal = section.parts().len() == 1
             && matches!(&section.parts()[0], FormatPart::Literal(s) if s.len() == 1);
-        let has_fraction = section
-            .parts()
-            .iter()
-            .any(|p| matches!(p, FormatPart::Fraction { .. }));
-        let has_scientific = section
-            .parts()
-            .iter()
-            .any(|p| matches!(p, FormatPart::Scientific { .. }));
         let need_minus_sign = num_sections == 1
             && value < 0.0
             && (has_numeric_parts || is_single_char_literal)
             && !use_abs_value
-            && !has_fraction
-            && !has_scientific;
+            && plan.kind != SectionKind::Scientific;
 
         if matches!(plan.kind, SectionKind::General | SectionKind::Literal) {
             let mut parts = evaluate_simple_number(plan, format_value);
@@ -136,7 +127,10 @@ impl NumberFormat {
         }
 
         if plan.kind == SectionKind::Fraction {
-            let parts = fraction::evaluate_fraction(format_value, plan, opts)?;
+            let mut parts = fraction::evaluate_fraction(format_value, plan, opts)?;
+            if need_minus_sign {
+                parts.insert(0, render::RenderPart::Text("-".to_string()));
+            }
             return render::resolve_layout(&parts, opts.fill_count);
         }
 

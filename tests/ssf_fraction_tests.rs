@@ -95,10 +95,5 @@ fn test_ssf_fractions() {
         100.0 * failed as f64 / total as f64
     );
 
-    if failed > 0 {
-        println!(
-            "\nNote: {} tests failed. Fraction formatting not yet implemented.",
-            failed
-        );
-    }
+    assert_eq!(failed, 0, "all SSF fraction compatibility cases must pass");
 }

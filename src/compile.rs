@@ -1,8 +1,6 @@
 //! Immutable execution-plan compilation for normalized format syntax.
 
-use crate::ast::{
-    Color, Condition, DatePart, DigitPlaceholder, FormatPart, FractionDenom, Section,
-};
+use crate::ast::{Color, Condition, DatePart, DigitPlaceholder, FormatPart, FractionPart, Section};
 
 /// All compiled section plans owned by one number format.
 #[derive(Clone)]
@@ -132,21 +130,43 @@ pub(crate) struct ScientificSpec {
     pub(crate) percent_count: usize,
 }
 
-/// Reusable fraction semantics extracted from the normalized fraction node.
+/// Reusable fraction semantics extracted from source-ordered fraction components.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FractionSpec {
-    /// Operation index at which the semantic fraction field is emitted.
+    /// Mixed-fraction integer placeholders in operation order.
+    pub(crate) integer_placeholders: Box<[NumberPlaceholder]>,
+    /// Numerator placeholders in operation order.
+    pub(crate) numerator_placeholders: Box<[NumberPlaceholder]>,
+    /// Operation index of the fraction slash.
+    pub(crate) slash_index: usize,
+    /// Compiled variable or fixed denominator policy.
+    pub(crate) denominator: FractionDenominatorSpec,
+}
+
+/// Value-independent denominator policy for a compiled fraction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FractionDenominatorSpec {
+    /// A denominator approximated to the configured placeholder width.
+    Variable {
+        /// Denominator placeholders in operation order.
+        placeholders: Box<[NumberPlaceholder]>,
+    },
+    /// A denominator with a fixed numeric value and source-ordered digits.
+    Fixed {
+        /// Numeric value accumulated from the source digits.
+        value: u32,
+        /// Individual fixed digits and their operation positions.
+        digits: Box<[FixedDenominatorDigit]>,
+    },
+}
+
+/// One fixed-denominator source digit and its compiled operation position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FixedDenominatorDigit {
+    /// Index of the corresponding semantic operation.
     pub(crate) operation_index: usize,
-    /// Digit placeholders for a mixed fraction's integer part.
-    pub(crate) integer_digits: Box<[DigitPlaceholder]>,
-    /// Digit placeholders for the numerator.
-    pub(crate) numerator_digits: Box<[DigitPlaceholder]>,
-    /// Fixed or maximum-width denominator policy.
-    pub(crate) denominator: FractionDenom,
-    /// Literal spacing immediately before the slash.
-    pub(crate) space_before_slash: Box<str>,
-    /// Literal spacing immediately after the slash.
-    pub(crate) space_after_slash: Box<str>,
+    /// Source digit value.
+    pub(crate) digit: u8,
 }
 
 /// Date properties that are stable for every evaluation of a section.
@@ -255,33 +275,69 @@ fn compile_scientific_spec(parts: &[FormatPart]) -> ScientificSpec {
     }
 }
 
-/// Compile the normalized fraction node into an immutable semantic spec.
+/// Compile normalized fraction components into an immutable semantic spec.
 fn compile_fraction_spec(parts: &[FormatPart]) -> FractionSpec {
-    parts
-        .iter()
-        .enumerate()
-        .find_map(|(operation_index, part)| {
-            if let FormatPart::Fraction {
-                integer_digits,
-                numerator_digits,
-                denominator,
-                space_before_slash,
-                space_after_slash,
-            } = part
-            {
-                Some(FractionSpec {
+    let mut integer_placeholders = Vec::new();
+    let mut numerator_placeholders = Vec::new();
+    let mut slash_index = None;
+    let mut denominator_placeholders = Vec::new();
+    let mut fixed_digits = Vec::new();
+    let mut fixed_value = 0_u32;
+
+    for (operation_index, part) in parts.iter().enumerate() {
+        let FormatPart::Fraction(component) = part else {
+            continue;
+        };
+        match component {
+            FractionPart::IntegerDigit(placeholder) => {
+                integer_placeholders.push(NumberPlaceholder {
                     operation_index,
-                    integer_digits: integer_digits.clone().into_boxed_slice(),
-                    numerator_digits: numerator_digits.clone().into_boxed_slice(),
-                    denominator: *denominator,
-                    space_before_slash: space_before_slash.clone().into_boxed_str(),
-                    space_after_slash: space_after_slash.clone().into_boxed_str(),
-                })
-            } else {
-                None
+                    placeholder: *placeholder,
+                });
             }
-        })
-        .expect("fraction sections contain a normalized fraction node")
+            FractionPart::NumeratorDigit(placeholder) => {
+                numerator_placeholders.push(NumberPlaceholder {
+                    operation_index,
+                    placeholder: *placeholder,
+                });
+            }
+            FractionPart::Slash => slash_index = Some(operation_index),
+            FractionPart::DenominatorDigit(placeholder) => {
+                denominator_placeholders.push(NumberPlaceholder {
+                    operation_index,
+                    placeholder: *placeholder,
+                });
+            }
+            FractionPart::FixedDenominatorDigit(digit) => {
+                fixed_value = fixed_value
+                    .checked_mul(10)
+                    .and_then(|value| value.checked_add(u32::from(*digit)))
+                    .expect("normalized fixed denominators fit in u32");
+                fixed_digits.push(FixedDenominatorDigit {
+                    operation_index,
+                    digit: *digit,
+                });
+            }
+        }
+    }
+
+    let denominator = if fixed_digits.is_empty() {
+        FractionDenominatorSpec::Variable {
+            placeholders: denominator_placeholders.into_boxed_slice(),
+        }
+    } else {
+        FractionDenominatorSpec::Fixed {
+            value: fixed_value,
+            digits: fixed_digits.into_boxed_slice(),
+        }
+    };
+
+    FractionSpec {
+        integer_placeholders: integer_placeholders.into_boxed_slice(),
+        numerator_placeholders: numerator_placeholders.into_boxed_slice(),
+        slash_index: slash_index.expect("fraction sections contain a normalized slash"),
+        denominator,
+    }
 }
 
 /// Compile standard-number placeholder behavior without a runtime value.
@@ -355,7 +411,7 @@ fn classify_section(parts: &[FormatPart]) -> SectionKind {
         SectionKind::DateTime
     } else if parts
         .iter()
-        .any(|part| matches!(part, FormatPart::Fraction { .. }))
+        .any(|part| matches!(part, FormatPart::Fraction(_)))
     {
         SectionKind::Fraction
     } else if parts
@@ -504,8 +560,65 @@ mod tests {
         assert!(scientific.show_plus);
 
         let fraction = plan("# ?/?").fraction.unwrap();
-        assert_eq!(fraction.integer_digits.len(), 1);
-        assert_eq!(fraction.numerator_digits.len(), 1);
-        assert_eq!(fraction.denominator, FractionDenom::UpToDigits(1));
+        assert_eq!(fraction.integer_placeholders.len(), 1);
+        assert_eq!(fraction.numerator_placeholders.len(), 1);
+        assert_eq!(fraction.slash_index, 3);
+        assert!(matches!(
+            fraction.denominator,
+            FractionDenominatorSpec::Variable { ref placeholders }
+                if placeholders.len() == 1 && placeholders[0].operation_index == 4
+        ));
+    }
+
+    #[test]
+    fn test_compiles_fraction_fields_around_layout_anchors() {
+        let compiled = plan("#*x# ?/?");
+        let fraction = compiled.fraction.unwrap();
+
+        assert_eq!(
+            compiled.operations.as_ref(),
+            &[
+                Operation::Semantic(FormatPart::Fraction(FractionPart::IntegerDigit(
+                    DigitPlaceholder::Hash,
+                ))),
+                Operation::Fill('x'),
+                Operation::Semantic(FormatPart::Fraction(FractionPart::IntegerDigit(
+                    DigitPlaceholder::Hash,
+                ))),
+                Operation::Text(" ".into()),
+                Operation::Semantic(FormatPart::Fraction(FractionPart::NumeratorDigit(
+                    DigitPlaceholder::Question,
+                ))),
+                Operation::Semantic(FormatPart::Fraction(FractionPart::Slash)),
+                Operation::Semantic(FormatPart::Fraction(FractionPart::DenominatorDigit(
+                    DigitPlaceholder::Question,
+                ))),
+            ]
+        );
+        assert_eq!(
+            fraction
+                .integer_placeholders
+                .iter()
+                .map(|field| field.operation_index)
+                .collect::<Vec<_>>(),
+            vec![0, 2]
+        );
+        assert_eq!(fraction.numerator_placeholders[0].operation_index, 4);
+        assert_eq!(fraction.slash_index, 5);
+    }
+
+    #[test]
+    fn test_compiles_fixed_denominator_value_and_digit_positions() {
+        let fraction = plan("# ?/1*x6").fraction.unwrap();
+
+        assert!(matches!(
+            fraction.denominator,
+            FractionDenominatorSpec::Fixed { value: 16, ref digits }
+                if digits.as_ref()
+                    == [
+                        FixedDenominatorDigit { operation_index: 4, digit: 1 },
+                        FixedDenominatorDigit { operation_index: 6, digit: 6 },
+                    ]
+        ));
     }
 }

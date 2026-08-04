@@ -51,10 +51,9 @@ fn test_fill_number_preserves_grouping_separator_side() {
 
     let options = FormatOptions {
         fill_count: 3,
-        locale: {
-            let mut locale = ooxml_numfmt::Locale::default();
-            locale.thousands_separator = '·';
-            locale
+        locale: ooxml_numfmt::Locale {
+            thousands_separator: '·',
+            ..ooxml_numfmt::Locale::default()
         },
         ..FormatOptions::default()
     };
@@ -133,22 +132,42 @@ fn test_fill_scientific() {
 }
 
 #[test]
-fn test_fill_fraction() {
+fn test_fill_fraction_outer_positions_and_sign_policy() {
     assert_eq!(format_with_fill("*x# ?/?", 1.5, 3), "xxx1 1/2");
     assert_eq!(format_with_fill("*x# ?/?", -1.5, 3), "-xxx1 1/2");
     assert_eq!(format_with_fill("# ?/?*x", 1.5, 3), "1 1/2xxx");
     assert_eq!(format_with_fill("# ?/?;-*x# ?/?", -1.5, 3), "-xxx1 1/2");
     assert_eq!(format_with_fill("# ?/?;(*x# ?/?)", -1.5, 3), "(xxx1 1/2)");
+}
 
-    // Fraction at internal
+#[test]
+fn test_fill_fraction_integer_and_numerator_boundaries() {
     assert_eq!(format_with_fill("#*x# ?/?", 12.5, 3), "1xxx2 1/2");
     assert_eq!(format_with_fill("# *x?/?", 1.5, 3), "1 xxx1/2");
     assert_eq!(format_with_fill("# ?*x/?", 1.5, 3), "1 1xxx/2");
     assert_eq!(format_with_fill("# ? *x/?", 1.5, 3), "1 1 xxx/2");
+}
+
+#[test]
+fn test_fill_fraction_slash_and_denominator_boundaries() {
     assert_eq!(format_with_fill("# ?/*x?", 1.5, 3), "1 1/xxx2");
     assert_eq!(format_with_fill("# ?/*x ?", 1.5, 3), "1 1/xxx 2");
     assert_eq!(format_with_fill("# ?/ *x?", 1.5, 3), "1 1/ xxx2");
     assert_eq!(format_with_fill("# ?/1*x6", 1.2, 3), "1 3/1xxx6");
+}
+
+#[test]
+fn test_fill_fraction_expansion_counts() {
+    for (fill_count, fill) in [(0, ""), (1, "x"), (3, "xxx")] {
+        assert_eq!(
+            format_with_fill("#*x# ?/?", 12.5, fill_count),
+            format!("1{fill}2 1/2")
+        );
+        assert_eq!(
+            format_with_fill("# ?/1*x6", 1.2, fill_count),
+            format!("1 3/1{fill}6")
+        );
+    }
 }
 
 #[test]

@@ -257,8 +257,7 @@ fn prepare_integer_digit_fields(
 
     // Overflow positions share the first placeholder field so generated digits
     // and grouping remain before every following source operation.
-    let assigned_placeholders = std::iter::repeat(placeholders[0])
-        .take(overflow_count)
+    let assigned_placeholders = std::iter::repeat_n(placeholders[0], overflow_count)
         .chain(placeholders[active_start..].iter().copied());
     let mut positions = assigned_placeholders.enumerate().peekable();
 

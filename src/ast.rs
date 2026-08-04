@@ -194,11 +194,25 @@ pub enum ElapsedPart {
     Seconds2,
 }
 
-/// Fraction denominator specification.
+/// A source-ordered semantic component of a fraction format.
+///
+/// Literal spacing and layout directives between these components remain
+/// separate [`FormatPart`] values in the syntax tree. Programmatic sections
+/// should provide a complete numerator, slash, and variable or fixed
+/// denominator sequence; integer components are optional for improper
+/// fractions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FractionDenom {
-    UpToDigits(u8),
-    Fixed(u32),
+pub enum FractionPart {
+    /// A digit placeholder belonging to the whole-number portion of a mixed fraction.
+    IntegerDigit(DigitPlaceholder),
+    /// A digit placeholder belonging to the numerator.
+    NumeratorDigit(DigitPlaceholder),
+    /// The fraction slash.
+    Slash,
+    /// A digit placeholder belonging to a variable denominator.
+    DenominatorDigit(DigitPlaceholder),
+    /// One source digit belonging to a fixed denominator.
+    FixedDenominatorDigit(u8),
 }
 
 /// Locale code from format string.
@@ -232,19 +246,12 @@ pub enum FormatPart {
         /// True to always show sign, false for minus only
         show_plus: bool,
     },
-    /// Fraction format (e.g., # #/# or # ??/??)
-    Fraction {
-        /// Digit placeholders for integer part
-        integer_digits: Vec<DigitPlaceholder>,
-        /// Digit placeholders for numerator
-        numerator_digits: Vec<DigitPlaceholder>,
-        /// Denominator specification (fixed or up to N digits)
-        denominator: FractionDenom,
-        /// Space before slash (for formats like "# ?? / ??")
-        space_before_slash: String,
-        /// Space after slash (for formats like "# ?? / ??")
-        space_after_slash: String,
-    },
+    /// One source-ordered fraction component (for example, a numerator digit or slash).
+    ///
+    /// A complete fraction is represented by multiple `Fraction` parts. Source
+    /// spacing remains represented by [`FormatPart::Literal`], and fixed
+    /// denominator digits remain distinct components.
+    Fraction(FractionPart),
     /// Date/time component
     DatePart(DatePart),
     /// AM/PM indicator
@@ -281,7 +288,7 @@ impl FormatPart {
                 | FormatPart::ThousandsSeparator
                 | FormatPart::Percent
                 | FormatPart::Scientific { .. }
-                | FormatPart::Fraction { .. }
+                | FormatPart::Fraction(_)
         )
     }
 }

@@ -1,4 +1,6 @@
-use ooxml_numfmt::ast::{Condition, DatePart, DigitPlaceholder, FormatPart, NamedColor, Section};
+use ooxml_numfmt::ast::{
+    Condition, DatePart, DigitPlaceholder, FormatPart, FractionPart, NamedColor, Section,
+};
 use ooxml_numfmt::NumberFormat;
 
 #[test]
@@ -30,6 +32,13 @@ fn test_format_part_is_date_part() {
 
     assert!(year.is_date_part());
     assert!(!digit.is_date_part());
+}
+
+#[test]
+fn test_fraction_part_are_numeric() {
+    let component = FormatPart::Fraction(FractionPart::NumeratorDigit(DigitPlaceholder::Question));
+
+    assert!(component.is_numeric_part());
 }
 
 #[test]

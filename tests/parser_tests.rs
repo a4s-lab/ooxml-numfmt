@@ -94,3 +94,13 @@ fn test_parse_multiple_fill_operators_keeps_only_last() {
         ]
     );
 }
+
+#[test]
+fn test_overflowing_fixed_denominator_is_not_partially_tagged() {
+    let format = NumberFormat::parse("# ?/99999999999").unwrap();
+
+    assert!(format.sections()[0]
+        .parts()
+        .iter()
+        .all(|part| !matches!(part, FormatPart::Fraction(_))));
+}
