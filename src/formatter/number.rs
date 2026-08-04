@@ -22,8 +22,9 @@ pub(super) fn evaluate_number(
     Ok(super::evaluate_operations(
         plan,
         |operation_index, part| match part {
-            FormatPart::Digit(_) | FormatPart::DecimalPoint => fields[operation_index].clone(),
-            FormatPart::ThousandsSeparator => None,
+            FormatPart::Digit(_) | FormatPart::DecimalPoint | FormatPart::ThousandsSeparator => {
+                fields[operation_index].clone()
+            }
             FormatPart::Percent => Some("%".to_string()),
             FormatPart::Locale(locale) => locale.currency.clone(),
             _ => None,
@@ -243,35 +244,62 @@ fn prepare_integer_digit_fields(
 
     // Without grouping SSF evaluates the full placeholder width. With grouping
     // it narrows optional leading placeholders to the displayed digit width.
-    let output_len = if spec.use_thousands {
+    let uses_grouping = spec.uses_thousands();
+    let position_count = if uses_grouping {
         value_digits.len().max(minimum_digits)
     } else {
         value_digits.len().max(placeholders.len())
     };
-    let extra_digits = output_len.saturating_sub(placeholders.len());
-    let active_placeholders = output_len.min(placeholders.len());
-    let first_placeholder = placeholders.len() - active_placeholders;
+    let overflow_count = position_count.saturating_sub(placeholders.len());
+    let active_count = position_count.min(placeholders.len());
+    let active_start = placeholders.len() - active_count;
+    let leading_padding = position_count - value_digits.len();
 
-    for logical_index in 0..output_len {
-        let placeholder_index = if logical_index < extra_digits {
-            0
+    // Overflow positions share the first placeholder field so generated digits
+    // and grouping remain before every following source operation.
+    let assigned_placeholders = std::iter::repeat(placeholders[0])
+        .take(overflow_count)
+        .chain(placeholders[active_start..].iter().copied());
+    let mut positions = assigned_placeholders.enumerate().peekable();
+
+    while let Some((logical_index, placeholder)) = positions.next() {
+        let character = if logical_index < leading_padding {
+            placeholder.placeholder.empty_char()
         } else {
-            first_placeholder + logical_index - extra_digits
+            Some(value_digits[logical_index - leading_padding])
         };
-        let placeholder = placeholders[placeholder_index];
-        let value_index =
-            value_digits.len() as isize - output_len as isize + logical_index as isize;
-        let output = fields[placeholder.operation_index].get_or_insert_with(String::new);
-
-        if value_index >= 0 {
-            output.push(value_digits[value_index as usize]);
-        } else if let Some(character) = placeholder.placeholder.empty_char() {
-            output.push(character);
+        if let Some(character) = character {
+            fields[placeholder.operation_index]
+                .get_or_insert_with(String::new)
+                .push(character);
         }
 
-        let remaining_positions = output_len - logical_index - 1;
-        if spec.use_thousands && remaining_positions > 0 && remaining_positions % 3 == 0 {
-            output.push(opts.locale.thousands_separator);
+        let positions_remaining = position_count - logical_index - 1;
+        if uses_grouping && positions_remaining % 3 == 0 {
+            let Some((_, next_placeholder)) = positions.peek().copied() else {
+                continue;
+            };
+
+            // Prefer the source comma between these placeholders so adjacent
+            // fills and literals retain their operation order.
+            let source_anchor =
+                spec.grouping_comma_indices
+                    .iter()
+                    .copied()
+                    .find(|operation_index| {
+                        placeholder.operation_index < *operation_index
+                            && *operation_index < next_placeholder.operation_index
+                    });
+
+            if let Some(operation_index) = source_anchor {
+                fields[operation_index] = Some(opts.locale.thousands_separator.to_string());
+            } else {
+                // Overflow boundaries have no distinct source operation and
+                // therefore remain in the repeated leading placeholder field.
+                fields[placeholder.operation_index]
+                    .get_or_insert_with(String::new)
+                    .push(opts.locale.thousands_separator);
+            }
         }
     }
 }
@@ -298,8 +326,9 @@ pub(super) fn evaluate_integer_digits(
     Ok(super::evaluate_operations(
         plan,
         |operation_index, part| match part {
-            FormatPart::Digit(_) | FormatPart::DecimalPoint => fields[operation_index].clone(),
-            FormatPart::ThousandsSeparator => None,
+            FormatPart::Digit(_) | FormatPart::DecimalPoint | FormatPart::ThousandsSeparator => {
+                fields[operation_index].clone()
+            }
             FormatPart::Percent => Some("%".to_string()),
             FormatPart::Locale(locale) => locale.currency.clone(),
             _ => None,

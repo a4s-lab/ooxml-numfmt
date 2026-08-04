@@ -46,6 +46,24 @@ fn test_fill_number_preserves_grouping_separator_side() {
     assert_eq!(format_default("#\"a\",##0", 1234.0), "1a,234");
     assert_eq!(format_default("#,\"a\"##0", 1234.0), "1,a234");
     assert_eq!(format_with_fill("#\"a\",*x##0", 1234.0, 3), "1a,xxx234");
+    assert_eq!(format_with_fill("#*x,##0", 1_234_567.0, 3), "1,234xxx,567");
+    assert_eq!(format_with_fill("#,*x##0", 1_234_567.0, 3), "1,234,xxx567");
+
+    let options = FormatOptions {
+        fill_count: 3,
+        locale: {
+            let mut locale = ooxml_numfmt::Locale::default();
+            locale.thousands_separator = '·';
+            locale
+        },
+        ..FormatOptions::default()
+    };
+    assert_eq!(
+        NumberFormat::parse("#*x,##0")
+            .unwrap()
+            .format(1234.0, &options),
+        "1xxx·234"
+    );
 }
 
 #[test]
@@ -92,6 +110,12 @@ fn test_fill_bigint() {
     assert_eq!(
         format.format_bigint(&value, &options),
         "12345678901234567xxx8"
+    );
+
+    let grouped = NumberFormat::parse("#*x,##0").unwrap();
+    assert_eq!(
+        grouped.format_bigint(&value, &options),
+        "123,456,789,012,345xxx,678"
     );
 }
 

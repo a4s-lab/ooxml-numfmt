@@ -82,8 +82,8 @@ pub(crate) struct NumberSpec {
     pub(crate) decimal_placeholders: Box<[NumberPlaceholder]>,
     /// Operation index of the decimal separator, when present.
     pub(crate) decimal_point_index: Option<usize>,
-    /// Whether dynamic thousands grouping is enabled.
-    pub(crate) use_thousands: bool,
+    /// Ordered operation indices of commas that enable thousands grouping.
+    pub(crate) grouping_comma_indices: Box<[usize]>,
     /// Number of trailing commas that scale the value by one thousand.
     pub(crate) thousands_scale: usize,
     /// Number of percent operations that each multiply the value by one hundred.
@@ -94,6 +94,11 @@ impl NumberSpec {
     /// Return the number of configured decimal placeholder positions.
     pub(crate) fn decimal_places(&self) -> usize {
         self.decimal_placeholders.len()
+    }
+
+    /// Return whether the format enables dynamic thousands grouping.
+    pub(crate) fn uses_thousands(&self) -> bool {
+        !self.grouping_comma_indices.is_empty()
     }
 }
 
@@ -281,25 +286,17 @@ fn compile_fraction_spec(parts: &[FormatPart]) -> FractionSpec {
 
 /// Compile standard-number placeholder behavior without a runtime value.
 fn compile_number_spec(parts: &[FormatPart]) -> NumberSpec {
-    let trailing_comma_count = parts
-        .iter()
-        .rev()
-        .take_while(|part| !matches!(part, FormatPart::Digit(_) | FormatPart::DecimalPoint))
-        .filter(|part| matches!(part, FormatPart::ThousandsSeparator))
-        .count();
-    let total_comma_count = parts
-        .iter()
-        .filter(|part| matches!(part, FormatPart::ThousandsSeparator))
-        .count();
-    let grouping_comma_count = total_comma_count.saturating_sub(trailing_comma_count);
     let mut integer_placeholders = Vec::new();
     let mut decimal_placeholders = Vec::new();
+    let mut grouping_comma_indices = Vec::new();
+    let mut trailing_comma_count = 0;
     let mut decimal_point_index = None;
     let mut after_decimal = false;
 
     for (operation_index, part) in parts.iter().enumerate() {
         match part {
             FormatPart::Digit(placeholder) => {
+                trailing_comma_count = 0;
                 let compiled = NumberPlaceholder {
                     operation_index,
                     placeholder: *placeholder,
@@ -310,13 +307,27 @@ fn compile_number_spec(parts: &[FormatPart]) -> NumberSpec {
                     integer_placeholders.push(compiled);
                 }
             }
-            FormatPart::DecimalPoint if decimal_point_index.is_none() => {
-                decimal_point_index = Some(operation_index);
-                after_decimal = true;
+            FormatPart::DecimalPoint => {
+                trailing_comma_count = 0;
+                if decimal_point_index.is_none() {
+                    decimal_point_index = Some(operation_index);
+                    after_decimal = true;
+                }
+            }
+            FormatPart::ThousandsSeparator => {
+                grouping_comma_indices.push(operation_index);
+                trailing_comma_count += 1;
             }
             _ => {}
         }
     }
+
+    // Remove trailing comma indices that are not part of the grouping separator
+    grouping_comma_indices.truncate(
+        grouping_comma_indices
+            .len()
+            .saturating_sub(trailing_comma_count),
+    );
 
     if integer_placeholders.is_empty() && decimal_point_index.is_none() {
         integer_placeholders.push(NumberPlaceholder {
@@ -329,7 +340,7 @@ fn compile_number_spec(parts: &[FormatPart]) -> NumberSpec {
         integer_placeholders: integer_placeholders.into_boxed_slice(),
         decimal_placeholders: decimal_placeholders.into_boxed_slice(),
         decimal_point_index,
-        use_thousands: grouping_comma_count > 0,
+        grouping_comma_indices: grouping_comma_indices.into_boxed_slice(),
         thousands_scale: trailing_comma_count,
         percent_count: parts
             .iter()
@@ -477,7 +488,8 @@ mod tests {
 
         assert_eq!(number.integer_placeholders.len(), 4);
         assert_eq!(number.decimal_places(), 2);
-        assert!(number.use_thousands);
+        assert!(number.uses_thousands());
+        assert_eq!(number.grouping_comma_indices.as_ref(), &[1]);
         assert_eq!(number.thousands_scale, 2);
         assert_eq!(number.percent_count, 1);
     }
