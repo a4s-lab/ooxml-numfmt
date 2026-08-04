@@ -248,8 +248,9 @@ fn format_date_part(
                     // Multiple subsecond displays: truncate for consistency
                     (high_precision * multiplier as f64) as u32 % multiplier
                 } else {
-                    // Single subsecond display: round
-                    ((high_precision * multiplier as f64).round() as u32) % multiplier
+                    // Single subsecond display: use the same rounding operation as
+                    // the whole-second carry check.
+                    rounded_subsecond_digits(subsecond_fraction, places) % multiplier
                 };
                 format!("{:0width$}", subsec, width = places as usize)
             }
@@ -373,14 +374,12 @@ fn apply_time_prerounding(
             *second = sec as u32;
         }
         TimeUnit::Subseconds => {
-            // For subsecond display, check if the subseconds would round up to the next second
-            // based on the display precision.
-            // For n decimal places, threshold = 1 - 0.5 * 10^(-n)
-            // e.g., .0 (1 place): 0.95 rounds to 1.0
-            //       .00 (2 places): 0.995 rounds to 1.00
+            // Carry exactly when rendering at this precision rounds the fractional
+            // digits to a complete second. Comparing rounded digits avoids a
+            // floating-point threshold mismatch at values such as 0.95.
             if let Some(precision) = subsecond_precision {
-                let threshold = 1.0 - 0.5 * 10_f64.powi(-(precision as i32));
-                if subseconds >= threshold {
+                let multiplier = 10_u32.pow(precision as u32);
+                if rounded_subsecond_digits(subseconds, precision) >= multiplier {
                     let mut sec = *second as i64 + 1;
                     if sec >= 60 {
                         sec %= 60;
@@ -478,6 +477,16 @@ fn format_elapsed(part: ElapsedPart, serial_value: f64) -> String {
             }
         }
     }
+}
+
+/// Round a fractional second into the integer digits shown at `precision`.
+///
+/// The initial four-place normalization matches SSF's handling of floating-point
+/// noise and is shared by fractional rendering and whole-second carry detection.
+fn rounded_subsecond_digits(subseconds: f64, precision: u8) -> u32 {
+    let multiplier = 10_u32.pow(precision as u32);
+    let normalized = (subseconds * 10000.0).round() / 10000.0;
+    (normalized * multiplier as f64).round() as u32
 }
 
 #[cfg(test)]
