@@ -129,10 +129,14 @@ fn prepare_scientific_fields(
     assign_right_aligned(&exponent_text, &spec.exponent_digits, &mut fields);
     if let Some(operation_index) = spec.decimal_point_index {
         if decimal_places > 0 {
-            fields[operation_index] = Some(".".to_string());
+            fields[operation_index]
+                .get_or_insert_with(String::new)
+                .push('.');
         }
     }
-    fields[spec.exponent_marker_index] = Some(format!("{exponent_marker}{exponent_sign}"));
+    fields[spec.exponent_marker_index]
+        .get_or_insert_with(String::new)
+        .push_str(&format!("{exponent_marker}{exponent_sign}"));
 
     fields
 }
@@ -490,6 +494,27 @@ mod tests {
         assert_eq!(
             super::super::render::resolve_layout(&parts, 3).unwrap(),
             "0xxx1.0E+2"
+        );
+    }
+
+    #[test]
+    fn preserves_implicit_scientific_mantissa_integer() {
+        let format = crate::NumberFormat::parse(".0E+00").unwrap();
+        let plan = &format.compiled.sections[0];
+        let parts = evaluate_scientific(1.2, plan, &FormatOptions::default()).unwrap();
+
+        assert_eq!(
+            super::super::render::resolve_layout(&parts, 0).unwrap(),
+            "1.2E+00"
+        );
+
+        let format = crate::NumberFormat::parse("E+00").unwrap();
+        let plan = &format.compiled.sections[0];
+        let parts = evaluate_scientific(1.2, plan, &FormatOptions::default()).unwrap();
+
+        assert_eq!(
+            super::super::render::resolve_layout(&parts, 0).unwrap(),
+            "1E+00"
         );
     }
 }

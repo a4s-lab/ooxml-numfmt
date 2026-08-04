@@ -259,12 +259,20 @@ fn compile_scientific_spec(parts: &[FormatPart]) -> ScientificSpec {
         }
     }
 
+    let exponent_marker_index =
+        exponent_marker_index.expect("scientific sections contain an exponent marker");
+    if mantissa_integer.is_empty() {
+        mantissa_integer.push(NumberPlaceholder {
+            operation_index: decimal_point_index.unwrap_or(exponent_marker_index),
+            placeholder: DigitPlaceholder::Hash,
+        });
+    }
+
     ScientificSpec {
         mantissa_integer: mantissa_integer.into_boxed_slice(),
         mantissa_decimal: mantissa_decimal.into_boxed_slice(),
         decimal_point_index,
-        exponent_marker_index: exponent_marker_index
-            .expect("scientific sections contain an exponent marker"),
+        exponent_marker_index,
         exponent_digits: exponent_digits.into_boxed_slice(),
         upper,
         show_plus,

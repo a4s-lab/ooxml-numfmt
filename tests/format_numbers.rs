@@ -33,6 +33,17 @@ fn test_format_decimal_without_integer_placeholder() {
 }
 
 #[test]
+fn test_format_scientific_without_integer_placeholder() {
+    let opts = FormatOptions::default();
+    let scientific = NumberFormat::parse(".0E+00").unwrap();
+
+    assert_eq!(scientific.format(1.2, &opts), "1.2E+00");
+    assert_eq!(scientific.format(0.5, &opts), "5.0E-01");
+    assert_eq!(scientific.format(-1.2, &opts), "-1.2E+00");
+    assert_eq!(scientific.format(0.0, &opts), "0.0E+00");
+}
+
+#[test]
 fn test_format_thousands() {
     let fmt = NumberFormat::parse("#,##0").unwrap();
     let opts = FormatOptions::default();
