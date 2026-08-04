@@ -1,6 +1,7 @@
 //! Immutable execution-plan compilation for normalized format syntax.
 
 use crate::ast::{Color, Condition, DatePart, DigitPlaceholder, FormatPart, FractionPart, Section};
+use crate::error::ParseError;
 
 /// All compiled section plans owned by one number format.
 #[derive(Clone)]
@@ -11,10 +12,14 @@ pub(crate) struct CompiledFormat {
 
 impl CompiledFormat {
     /// Compile every retained syntax section exactly once.
-    pub(crate) fn new(sections: &[Section]) -> Self {
-        Self {
-            sections: sections.iter().map(compile_section).collect(),
-        }
+    pub(crate) fn new(sections: &[Section]) -> Result<Self, ParseError> {
+        let sections = sections
+            .iter()
+            .enumerate()
+            .map(|(section_index, section)| compile_section(section, section_index))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_boxed_slice();
+        Ok(Self { sections })
     }
 }
 
@@ -200,9 +205,20 @@ pub(crate) enum TimeUnit {
 }
 
 /// Compile one normalized syntax section into immutable execution data.
-fn compile_section(section: &Section) -> SectionPlan {
+fn compile_section(section: &Section, section_index: usize) -> Result<SectionPlan, ParseError> {
     let kind = classify_section(section.parts());
-    SectionPlan {
+    let fraction_slash_index = section
+        .parts()
+        .iter()
+        .rposition(|part| matches!(part, FormatPart::Fraction(FractionPart::Slash)));
+    let fraction = if kind == SectionKind::Fraction {
+        fraction_slash_index
+            .map(|slash_index| compile_fraction_spec(section.parts(), section_index, slash_index))
+            .transpose()?
+    } else {
+        None
+    };
+    Ok(SectionPlan {
         condition: section.condition(),
         color: section.color(),
         kind,
@@ -211,8 +227,8 @@ fn compile_section(section: &Section) -> SectionPlan {
         number: (kind == SectionKind::Number).then(|| compile_number_spec(section.parts())),
         scientific: (kind == SectionKind::Scientific)
             .then(|| compile_scientific_spec(section.parts())),
-        fraction: (kind == SectionKind::Fraction).then(|| compile_fraction_spec(section.parts())),
-    }
+        fraction,
+    })
 }
 
 /// Compile scientific mantissa and exponent fields from normalized syntax.
@@ -284,10 +300,13 @@ fn compile_scientific_spec(parts: &[FormatPart]) -> ScientificSpec {
 }
 
 /// Compile normalized fraction components into an immutable semantic spec.
-fn compile_fraction_spec(parts: &[FormatPart]) -> FractionSpec {
+fn compile_fraction_spec(
+    parts: &[FormatPart],
+    section_index: usize,
+    slash_index: usize,
+) -> Result<FractionSpec, ParseError> {
     let mut integer_placeholders = Vec::new();
     let mut numerator_placeholders = Vec::new();
-    let mut slash_index = None;
     let mut denominator_placeholders = Vec::new();
     let mut fixed_digits = Vec::new();
     let mut fixed_value = 0_u32;
@@ -309,7 +328,7 @@ fn compile_fraction_spec(parts: &[FormatPart]) -> FractionSpec {
                     placeholder: *placeholder,
                 });
             }
-            FractionPart::Slash => slash_index = Some(operation_index),
+            FractionPart::Slash => {}
             FractionPart::DenominatorDigit(placeholder) => {
                 denominator_placeholders.push(NumberPlaceholder {
                     operation_index,
@@ -317,10 +336,19 @@ fn compile_fraction_spec(parts: &[FormatPart]) -> FractionSpec {
                 });
             }
             FractionPart::FixedDenominatorDigit(digit) => {
+                if *digit > 9 {
+                    return Err(ParseError::InvalidFraction {
+                        section_index,
+                        reason: "fixed denominator components must be decimal digits",
+                    });
+                }
                 fixed_value = fixed_value
                     .checked_mul(10)
                     .and_then(|value| value.checked_add(u32::from(*digit)))
-                    .expect("normalized fixed denominators fit in u32");
+                    .ok_or(ParseError::InvalidFraction {
+                        section_index,
+                        reason: "fixed denominator exceeds u32::MAX",
+                    })?;
                 fixed_digits.push(FixedDenominatorDigit {
                     operation_index,
                     digit: *digit,
@@ -340,12 +368,12 @@ fn compile_fraction_spec(parts: &[FormatPart]) -> FractionSpec {
         }
     };
 
-    FractionSpec {
+    Ok(FractionSpec {
         integer_placeholders: integer_placeholders.into_boxed_slice(),
         numerator_placeholders: numerator_placeholders.into_boxed_slice(),
-        slash_index: slash_index.expect("fraction sections contain a normalized slash"),
+        slash_index,
         denominator,
-    }
+    })
 }
 
 /// Compile standard-number placeholder behavior without a runtime value.
@@ -540,7 +568,8 @@ mod tests {
             None,
             Some(crate::ast::Color::Named(crate::ast::NamedColor::Red)),
             vec![FormatPart::Digit(DigitPlaceholder::Zero)],
-        )]);
+        )])
+        .unwrap();
 
         assert_eq!(parsed.compiled.sections, programmatic.compiled.sections);
     }

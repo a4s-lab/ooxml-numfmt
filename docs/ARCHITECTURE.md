@@ -46,6 +46,7 @@ contracts.
 | `Operation`                        | Private ordered bridge between parsed syntax and evaluators | Source-order preservation is stable; variants may change      |
 | `RenderPart`                       | Private boundary between semantic evaluation and layout     | Deferred-layout boundary is stable; representation may change |
 | `FormatOptions`                    | Public per-call formatting and layout policy                | Public option semantics are stable                            |
+| `ParseError`                       | Public parsing and programmatic construction failures       | Invalid format syntax is reported rather than panicking       |
 | `FormatError`                      | Public failures from fallible formatting APIs               | Public error behavior follows normal compatibility policy     |
 
 Domain-specific compiled specifications, such as the current number, date,
@@ -133,7 +134,7 @@ sections, and fallback behavior are observable spreadsheet semantics. Internal
 refactoring must preserve them unless a deliberate compatibility change is
 specified and tested.
 
-Fallible APIs returning `FormatError` are the canonical execution paths.
+Fallible APIs returning `FormatError` or `ParseError` are the canonical execution paths.
 Convenience APIs may provide compatibility fallbacks, but those fallbacks must
 be deterministic and must not panic.
 

@@ -40,7 +40,7 @@ pub fn parse(format_code: &str) -> Result<NumberFormat, ParseError> {
     if let Some(color) = general_check {
         // Create an empty section that will trigger fallback formatting
         let general_section = Section::new(None, color, Vec::new());
-        return Ok(NumberFormat::from_sections(vec![general_section]));
+        return NumberFormat::from_sections(vec![general_section]);
     }
 
     let mut parser = Parser::new(format_code);
@@ -100,7 +100,7 @@ impl<'a> Parser<'a> {
             }
         }
 
-        Ok(NumberFormat::from_sections(sections))
+        NumberFormat::from_sections(sections)
     }
 
     /// Parse a single section of the format.

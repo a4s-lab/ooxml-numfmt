@@ -467,7 +467,7 @@ mod tests {
     use crate::ast::{Condition, DigitPlaceholder, Section};
 
     fn make_format(sections: Vec<Section>) -> NumberFormat {
-        NumberFormat::from_sections(sections)
+        NumberFormat::from_sections(sections).unwrap()
     }
 
     fn make_section(parts: Vec<FormatPart>) -> Section {

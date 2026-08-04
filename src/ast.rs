@@ -198,9 +198,9 @@ pub enum ElapsedPart {
 ///
 /// Literal spacing and layout directives between these components remain
 /// separate [`FormatPart`] values in the syntax tree. Programmatic sections
-/// should provide a complete numerator, slash, and variable or fixed
-/// denominator sequence; integer components are optional for improper
-/// fractions.
+/// without a [`FractionPart::Slash`] are normalized back to ordinary numeric
+/// and literal parts by [`Section::new`], matching parser behavior for format
+/// codes that are not fractions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FractionPart {
     /// A digit placeholder belonging to the whole-number portion of a mixed fraction.
@@ -212,6 +212,9 @@ pub enum FractionPart {
     /// A digit placeholder belonging to a variable denominator.
     DenominatorDigit(DigitPlaceholder),
     /// One source digit belonging to a fixed denominator.
+    ///
+    /// Programmatic sections must use values from `0` through `9`, and the
+    /// complete fixed denominator must fit in a [`u32`].
     FixedDenominatorDigit(u8),
 }
 
@@ -315,11 +318,35 @@ impl Section {
     ///
     /// When multiple fill directives are supplied, only the final directive is
     /// retained at its original position, matching parser normalization.
+    /// Fraction components without a slash are restored to ordinary numeric
+    /// placeholders and literals rather than treated as fraction syntax.
     pub fn new(
         condition: Option<Condition>,
         color: Option<Color>,
         mut parts: Vec<FormatPart>,
     ) -> Self {
+        if !parts
+            .iter()
+            .any(|part| matches!(part, FormatPart::Fraction(FractionPart::Slash)))
+        {
+            for part in &mut parts {
+                let replacement = match part {
+                    FormatPart::Fraction(
+                        FractionPart::IntegerDigit(placeholder)
+                        | FractionPart::NumeratorDigit(placeholder)
+                        | FractionPart::DenominatorDigit(placeholder),
+                    ) => Some(FormatPart::Digit(*placeholder)),
+                    FormatPart::Fraction(FractionPart::FixedDenominatorDigit(digit)) => {
+                        Some(FormatPart::Literal(digit.to_string()))
+                    }
+                    _ => None,
+                };
+                if let Some(replacement) = replacement {
+                    *part = replacement;
+                }
+            }
+        }
+
         if let Some(final_fill_index) = parts
             .iter()
             .rposition(|part| matches!(part, FormatPart::Fill(_)))
@@ -399,17 +426,26 @@ impl fmt::Debug for NumberFormat {
 }
 
 impl NumberFormat {
-    /// Create a NumberFormat from parsed sections.
-    /// Limits to 4 sections maximum per Excel spec.
-    pub fn from_sections(sections: Vec<Section>) -> Self {
+    /// Create a `NumberFormat` from programmatically supplied sections.
+    ///
+    /// At most four sections are retained, matching Excel's section limit.
+    /// Explicit [`FractionPart`] components are validated before the compiled
+    /// execution plan is created.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError::InvalidFraction`] when a complete fraction contains
+    /// a non-decimal fixed-denominator component or has a fixed denominator
+    /// larger than [`u32::MAX`].
+    pub fn from_sections(sections: Vec<Section>) -> Result<Self, ParseError> {
         let sections = if sections.len() > 4 {
             sections.into_iter().take(4).collect()
         } else {
             sections
         };
         let sections = sections.into_boxed_slice();
-        let compiled = CompiledFormat::new(&sections);
-        NumberFormat { sections, compiled }
+        let compiled = CompiledFormat::new(&sections)?;
+        Ok(NumberFormat { sections, compiled })
     }
 
     /// Get the sections of this format.
