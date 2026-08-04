@@ -3,18 +3,18 @@
 mod date;
 mod fraction;
 mod number;
+mod render;
 mod text;
 
 #[cfg(feature = "bigint")]
 mod bigint;
 
-pub use number::format_number;
-
 #[cfg(feature = "bigint")]
 #[allow(unused_imports)]
-pub use bigint::{fallback_format_bigint, format_bigint, is_safe_integer};
+pub use bigint::{fallback_format_bigint, is_safe_integer};
 
-use crate::ast::{FormatPart, NumberFormat, Section};
+use crate::ast::{FormatPart, NumberFormat};
+use crate::compile::{Operation, SectionKind, SectionPlan};
 use crate::error::FormatError;
 use crate::options::FormatOptions;
 
@@ -50,20 +50,26 @@ impl NumberFormat {
 
         // Select the appropriate section based on value
         let sections = self.sections();
-        let section = &sections[self.select_section_index(value)];
+        let section_index = self.select_section_index(value);
+        let section = &sections[section_index];
+        let plan = &self.compiled.sections[section_index];
 
         // Excel behavior: when a conditional section strictly matches, format using absolute value
         // Use absolute value only when the condition is strictly satisfied (not at boundary)
-        let has_conditions = sections.iter().any(|s| s.condition.is_some());
+        let has_conditions = self
+            .compiled
+            .sections
+            .iter()
+            .any(|plan| plan.condition.is_some());
         let use_abs_value = has_conditions
-            && section.condition.is_some()
-            && section.condition.unwrap().is_strict_match(value);
+            && plan.condition.is_some()
+            && plan.condition.unwrap().is_strict_match(value);
         let format_value = if use_abs_value { value.abs() } else { value };
 
         // Handle "General" format (empty section with no parts)
         // This uses fallback formatting which matches Excel's General behavior
         // Note: sections can have conditions or colors and still be General format
-        if section.parts.is_empty() {
+        if section.parts().is_empty() {
             // Special case: if this is a strict conditional match, Excel truncates decimals
             // This handles formats like "[<-25]General" which show "50" instead of "50.1"
             let truncated_value = if use_abs_value && format_value.fract() != 0.0 {
@@ -71,12 +77,16 @@ impl NumberFormat {
             } else {
                 format_value
             };
-            return Ok(fallback_format(truncated_value));
+            return render::resolve_layout(
+                &[render::RenderPart::Text(fallback_format(truncated_value))],
+                opts.fill_count,
+            );
         }
 
         // Check if this is a date format
-        if section.has_date_parts() {
-            return date::format_date(format_value, section, opts);
+        if plan.kind == SectionKind::DateTime {
+            let parts = date::evaluate_date(format_value, plan, opts)?;
+            return render::resolve_layout(&parts, opts.fill_count);
         }
 
         // Determine if we need to add a minus sign
@@ -84,37 +94,57 @@ impl NumberFormat {
         // For multi-section formats, the section handles it
         // For literal-only formats (no numeric parts), add minus ONLY if it's a single unescaped single-char literal
         // But NOT if we're using absolute value due to conditional matching
-        // EXCEPTION: Fraction and scientific notation formats add their own minus sign
+        // Scientific notation retains its specialized sign path until its own refactor.
         let num_sections = sections.len();
-        let has_numeric_parts = section.parts.iter().any(|p| p.is_numeric_part());
-        let is_single_char_literal = section.parts.len() == 1
-            && matches!(&section.parts[0], FormatPart::Literal(s) if s.len() == 1);
-        let has_fraction = section
-            .parts
-            .iter()
-            .any(|p| matches!(p, FormatPart::Fraction { .. }));
-        let has_scientific = section
-            .parts
-            .iter()
-            .any(|p| matches!(p, FormatPart::Scientific { .. }));
+        let has_numeric_parts = section.parts().iter().any(|p| p.is_numeric_part());
+        let is_single_char_literal = section.parts().len() == 1
+            && matches!(&section.parts()[0], FormatPart::Literal(s) if s.len() == 1);
         let need_minus_sign = num_sections == 1
             && value < 0.0
             && (has_numeric_parts || is_single_char_literal)
             && !use_abs_value
-            && !has_fraction
-            && !has_scientific;
+            && plan.kind != SectionKind::Scientific;
 
-        // Format as a number
-        let mut result = format_number(format_value, section, opts)?;
-
-        // Add minus sign for single-section formats with negative values
-        // Note: format_number uses abs(value), so it never includes the minus sign
-        // Exception: Fraction and scientific notation formats add their own minus sign
-        if need_minus_sign {
-            result.insert(0, '-');
+        if matches!(plan.kind, SectionKind::General | SectionKind::Literal) {
+            let mut parts = evaluate_simple_number(plan, format_value);
+            if need_minus_sign {
+                parts.insert(0, render::RenderPart::Text("-".to_string()));
+            }
+            return render::resolve_layout(&parts, opts.fill_count);
         }
 
-        Ok(result)
+        if plan.kind == SectionKind::Number {
+            let mut parts = number::evaluate_number(format_value, plan, opts)?;
+            if need_minus_sign {
+                parts.insert(0, render::RenderPart::Text("-".to_string()));
+            }
+            return render::resolve_layout(&parts, opts.fill_count);
+        }
+
+        if plan.kind == SectionKind::Scientific {
+            let parts = number::evaluate_scientific(format_value, plan, opts)?;
+            return render::resolve_layout(&parts, opts.fill_count);
+        }
+
+        if plan.kind == SectionKind::Fraction {
+            let mut parts = fraction::evaluate_fraction(format_value, plan, opts)?;
+            if need_minus_sign {
+                parts.insert(0, render::RenderPart::Text("-".to_string()));
+            }
+            return render::resolve_layout(&parts, opts.fill_count);
+        }
+
+        if plan.kind == SectionKind::Text {
+            let mut numeric_text = Some(fallback_format(format_value));
+            let parts = evaluate_operations(plan, |_, part| match part {
+                FormatPart::TextPlaceholder => numeric_text.take(),
+                FormatPart::Locale(locale) => locale.currency.clone(),
+                _ => None,
+            });
+            return render::resolve_layout(&parts, opts.fill_count);
+        }
+
+        unreachable!("all compiled section kinds are handled above")
     }
 
     /// Return the index of the appropriate format section based on the value.
@@ -125,15 +155,15 @@ impl NumberFormat {
     /// - 3 sections: positive, negative, zero
     /// - 4 sections: positive, negative, zero, text
     pub fn select_section_index(&self, value: f64) -> usize {
-        let sections = self.sections();
+        let plans = &self.compiled.sections;
 
         // Check if any section has conditions
-        let has_conditions = sections.iter().any(|s| s.condition.is_some());
+        let has_conditions = plans.iter().any(|plan| plan.condition.is_some());
 
         if has_conditions {
             // With conditions: find matching conditional, or first non-conditional
-            for (index, section) in sections.iter().enumerate() {
-                if let Some(ref condition) = section.condition {
+            for (index, plan) in plans.iter().enumerate() {
+                if let Some(condition) = plan.condition {
                     if condition.evaluate(value) {
                         return index;
                     }
@@ -143,11 +173,11 @@ impl NumberFormat {
                 }
             }
             // Fallback to last section if nothing matched
-            return sections.len() - 1;
+            return plans.len() - 1;
         }
 
         // Standard section selection based on value sign (no conditions)
-        match sections.len() {
+        match plans.len() {
             0 => unreachable!("NumberFormat should always have at least one section"),
             1 => 0,
             2 => {
@@ -165,8 +195,8 @@ impl NumberFormat {
                 } else {
                     // Zero value - use section[2]
                     // Unless it's text-only (@), then use positive section
-                    if sections[2].has_text_placeholder()
-                        && !sections[2].parts.iter().any(|p| {
+                    if plans[2].kind == SectionKind::Text
+                        && !self.sections()[2].parts().iter().any(|p| {
                             p.is_numeric_part()
                                 || matches!(
                                     p,
@@ -185,22 +215,19 @@ impl NumberFormat {
     }
 
     /// Format a text value using this format code.
-    pub fn format_text(&self, text: &str, _opts: &FormatOptions) -> String {
-        if let Some(text_section) = self.select_text_section() {
-            let mut result = String::new();
+    pub fn format_text(&self, text: &str, opts: &FormatOptions) -> String {
+        self.try_format_text(text, opts)
+            .unwrap_or_else(|_| text.to_string())
+    }
 
-            for part in &text_section.parts {
-                match part {
-                    FormatPart::TextPlaceholder => result.push_str(text),
-                    FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => result.push_str(s),
-                    _ => {}
-                }
-            }
-
-            result
+    /// Try to format a text value while reporting layout allocation failures.
+    pub fn try_format_text(&self, text: &str, opts: &FormatOptions) -> Result<String, FormatError> {
+        if let Some(index) = self.select_text_section_index() {
+            let parts = text::evaluate_text(&self.compiled.sections[index], text);
+            render::resolve_layout(&parts, opts.fill_count)
         } else {
             // Default: return text as-is
-            text.to_string()
+            Ok(text.to_string())
         }
     }
 
@@ -208,18 +235,19 @@ impl NumberFormat {
     /// - If the 4th section is present, always return it.
     /// - With fewer sections, use the final section only if it contains `@`.
     /// - Otherwise, return None.
-    fn select_text_section(&self) -> Option<&Section> {
+    fn select_text_section_index(&self) -> Option<usize> {
         let sections = self.sections();
 
         // Text section is the 4th section if present
         if sections.len() >= 4 {
-            return Some(&sections[3]);
+            return Some(3);
         }
 
         // With fewer sections, the final section is the text section only if it contains `@`.
         sections
             .last()
             .filter(|section| section.has_text_placeholder())
+            .map(|_| sections.len() - 1)
     }
 
     /// Format a BigInt value using this format code (requires `bigint` feature).
@@ -257,43 +285,62 @@ impl NumberFormat {
 
         // For large integers, use string-based formatting
         let is_negative = value.sign() == Sign::Minus;
-        let section = if is_negative {
-            // Select negative section if available
-            let sections = self.sections();
-            if sections.len() >= 2 {
-                &sections[1]
-            } else {
-                &sections[0]
-            }
+        let section_index = if is_negative && self.sections().len() >= 2 {
+            1
         } else {
-            &self.sections()[0]
+            0
         };
+        let section = &self.sections()[section_index];
+        let plan = &self.compiled.sections[section_index];
 
         // Handle "General" format (empty section with no parts)
-        if section.parts.is_empty() {
+        if section.parts().is_empty() {
             return Ok(bigint::fallback_format_bigint(value));
         }
 
-        // Check if this is a date format - BigInt can't be used for dates
-        if section.has_date_parts() {
-            return Err(FormatError::TypeMismatch {
-                expected: "numeric format",
-                got: "date format with BigInt value",
-            });
-        }
-
-        // Format using BigInt-specific logic
-        let mut result = bigint::format_bigint(value, section, opts)?;
+        let mut parts = bigint::evaluate_bigint(value, plan, opts)?;
 
         // Add minus sign for negative values in single-section formats
         let sections = self.sections();
-        let has_numeric_parts = section.parts.iter().any(|p| p.is_numeric_part());
-        if sections.len() == 1 && is_negative && has_numeric_parts {
-            result.insert(0, '-');
+        if sections.len() == 1 && is_negative && plan.kind == SectionKind::Number {
+            parts.insert(0, render::RenderPart::Text("-".to_string()));
         }
 
-        Ok(result)
+        render::resolve_layout(&parts, opts.fill_count)
     }
+}
+
+/// Evaluate General and literal-only numeric sections without resolving layout.
+fn evaluate_simple_number(plan: &SectionPlan, value: f64) -> Vec<render::RenderPart> {
+    evaluate_operations(plan, |_, part| match part {
+        FormatPart::GeneralNumber => Some(fallback_format(value)),
+        FormatPart::Locale(locale) => locale.currency.clone(),
+        FormatPart::Percent => Some("%".to_string()),
+        _ => None,
+    })
+}
+
+/// Execute ordered operations while delegating semantic field evaluation.
+fn evaluate_operations(
+    plan: &SectionPlan,
+    mut evaluate_semantic: impl FnMut(usize, &FormatPart) -> Option<String>,
+) -> Vec<render::RenderPart> {
+    let mut output = Vec::new();
+
+    for (operation_index, operation) in plan.operations.iter().enumerate() {
+        match operation {
+            Operation::Text(text) => render::push_text(&mut output, text.as_ref()),
+            Operation::Fill(character) => output.push(render::RenderPart::Fill(*character)),
+            Operation::Skip(character) => output.push(render::RenderPart::Skip(*character)),
+            Operation::Semantic(part) => {
+                if let Some(text) = evaluate_semantic(operation_index, part) {
+                    render::push_text(&mut output, text);
+                }
+            }
+        }
+    }
+
+    output
 }
 
 /// Fallback formatting for when the format code cannot be applied.
@@ -420,16 +467,11 @@ mod tests {
     use crate::ast::{Condition, DigitPlaceholder, Section};
 
     fn make_format(sections: Vec<Section>) -> NumberFormat {
-        NumberFormat::from_sections(sections)
+        NumberFormat::from_sections(sections).unwrap()
     }
 
     fn make_section(parts: Vec<FormatPart>) -> Section {
-        Section {
-            condition: None,
-            color: None,
-            parts,
-            metadata: crate::ast::SectionMetadata::default(),
-        }
+        Section::new(None, None, parts)
     }
 
     #[test]
@@ -484,12 +526,11 @@ mod tests {
     #[test]
     fn test_select_section_with_condition() {
         let fmt = make_format(vec![
-            Section {
-                condition: Some(Condition::GreaterThan(100.0)),
-                color: None,
-                parts: vec![FormatPart::Literal("BIG".to_string())],
-                metadata: crate::ast::SectionMetadata::default(),
-            },
+            Section::new(
+                Some(Condition::GreaterThan(100.0)),
+                None,
+                vec![FormatPart::Literal("BIG".to_string())],
+            ),
             make_section(vec![FormatPart::Digit(DigitPlaceholder::Zero)]),
         ]);
 
@@ -528,6 +569,17 @@ mod tests {
         let opts = FormatOptions::default();
 
         assert_eq!(fmt.format_text("hello", &opts), "prehellopost");
+    }
+
+    #[test]
+    fn repeated_text_placeholders_render_numeric_values_once() {
+        let format = NumberFormat::parse("@@").unwrap();
+        let options = FormatOptions::default();
+
+        assert_eq!(format.format(1.0, &options), "1");
+        assert_eq!(format.format(-1.0, &options), "-1");
+        assert_eq!(format.format(0.0, &options), "0");
+        assert_eq!(format.format_text("sheetjs", &options), "sheetjssheetjs");
     }
 
     #[test]

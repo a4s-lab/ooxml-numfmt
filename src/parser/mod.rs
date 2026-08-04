@@ -4,8 +4,8 @@ pub mod lexer;
 pub mod tokens;
 
 use crate::ast::{
-    AmPmStyle, Color, Condition, DatePart, DigitPlaceholder, ElapsedPart, FormatPart, LocaleCode,
-    NamedColor, NumberFormat, Section,
+    AmPmStyle, Color, Condition, DatePart, DigitPlaceholder, ElapsedPart, FormatPart, FractionPart,
+    LocaleCode, NamedColor, NumberFormat, Section,
 };
 use crate::error::ParseError;
 use lexer::Lexer;
@@ -39,13 +39,8 @@ pub fn parse(format_code: &str) -> Result<NumberFormat, ParseError> {
 
     if let Some(color) = general_check {
         // Create an empty section that will trigger fallback formatting
-        let general_section = Section {
-            condition: None,
-            color,
-            parts: Vec::new(),
-            metadata: crate::ast::SectionMetadata::default(),
-        };
-        return Ok(NumberFormat::from_sections(vec![general_section]));
+        let general_section = Section::new(None, color, Vec::new());
+        return NumberFormat::from_sections(vec![general_section]);
     }
 
     let mut parser = Parser::new(format_code);
@@ -105,7 +100,7 @@ impl<'a> Parser<'a> {
             }
         }
 
-        Ok(NumberFormat::from_sections(sections))
+        NumberFormat::from_sections(sections)
     }
 
     /// Parse a single section of the format.
@@ -122,7 +117,9 @@ impl<'a> Parser<'a> {
                 Token::General => {
                     self.advance()?;
                     // Check if there are more format parts after "General"
-                    if matches!(self.current.token, Token::Eof | Token::SectionSep) {
+                    if matches!(self.current.token, Token::Eof | Token::SectionSep)
+                        && builder.is_empty()
+                    {
                         // Truly just "General" - return empty section for fallback formatting
                         break;
                     } else {
@@ -414,7 +411,7 @@ impl<'a> Parser<'a> {
         Ok(builder.build())
     }
 
-    /// Parse bracket content: [Red], [>100], [h], [$-409], etc.
+    /// Parse bracket content such as `[Red]`, `[>100]`, `[h]`, or `[$-409]`.
     fn parse_bracket_content(
         &mut self,
         builder: &mut SectionBuilder,
@@ -609,6 +606,20 @@ struct SectionBuilder {
     parts: Vec<FormatPart>,
 }
 
+/// A complete parser-side fraction match expressed in source-part indices.
+struct FractionMatch {
+    integer_indices: Vec<usize>,
+    numerator_indices: Vec<usize>,
+    slash_index: usize,
+    denominator: MatchedDenominator,
+}
+
+/// Denominator syntax retained while a complete fraction candidate is validated.
+enum MatchedDenominator {
+    Variable(Vec<usize>),
+    Fixed(Vec<(usize, u8)>),
+}
+
 impl SectionBuilder {
     fn new() -> Self {
         Self {
@@ -618,8 +629,15 @@ impl SectionBuilder {
         }
     }
 
+    /// Return whether this section has no normalized syntax parts yet.
+    fn is_empty(&self) -> bool {
+        self.parts.is_empty()
+    }
+
+    /// Add a normalized part, replacing any earlier fill directive.
     fn add_part(&mut self, part: FormatPart) {
-        // `Fill` parts replace any existing `Fill` parts, keeping only the last one
+        // The semantic AST retains at most one fill. A later directive replaces
+        // the earlier node while preserving the later directive's position.
         if matches!(&part, FormatPart::Fill(_)) {
             self.parts
                 .retain(|part| !matches!(part, FormatPart::Fill(_)));
@@ -634,277 +652,131 @@ impl SectionBuilder {
         // Post-process to detect subsecond patterns in date formats
         self.detect_subseconds();
 
-        // Compute metadata by scanning the parts once
-        let metadata = self.compute_metadata();
-
-        Section {
-            condition: self.condition,
-            color: self.color,
-            parts: self.parts,
-            metadata,
-        }
+        Section::new(self.condition, self.color, self.parts)
     }
 
-    /// Compute section metadata by scanning parts once
-    /// Based on SSF's eval_fmt in bits/82_eval.js
-    fn compute_metadata(&self) -> crate::ast::SectionMetadata {
-        use crate::ast::*;
-
-        let mut has_ampm = false;
-        let mut is_hijri = false;
-        let mut max_subsecond_precision = None;
-        let mut has_elapsed_time = false;
-        let mut smallest_time_unit = TimeUnit::None;
-        let mut format_type = FormatType::General;
-
-        // Scan parts to gather metadata
-        for part in &self.parts {
-            match part {
-                FormatPart::AmPm(_) => {
-                    has_ampm = true;
-                }
-                FormatPart::DatePart(DatePart::BuddhistYear4Alt | DatePart::BuddhistYear2Alt) => {
-                    is_hijri = true;
-                }
-                FormatPart::DatePart(DatePart::SubSecond(precision)) => {
-                    max_subsecond_precision =
-                        Some(max_subsecond_precision.unwrap_or(0).max(*precision));
-                    if smallest_time_unit < TimeUnit::Subseconds {
-                        smallest_time_unit = TimeUnit::Subseconds;
-                    }
-                }
-                FormatPart::DatePart(DatePart::Second | DatePart::Second2) => {
-                    if smallest_time_unit < TimeUnit::Seconds {
-                        smallest_time_unit = TimeUnit::Seconds;
-                    }
-                }
-                FormatPart::DatePart(DatePart::Minute | DatePart::Minute2) => {
-                    if smallest_time_unit < TimeUnit::Minutes {
-                        smallest_time_unit = TimeUnit::Minutes;
-                    }
-                }
-                FormatPart::DatePart(DatePart::Hour | DatePart::Hour2) => {
-                    if smallest_time_unit < TimeUnit::Hours {
-                        smallest_time_unit = TimeUnit::Hours;
-                    }
-                }
-                FormatPart::Elapsed(_) => {
-                    has_elapsed_time = true;
-                }
-                FormatPart::Fraction { .. } => {
-                    format_type = FormatType::Fraction;
-                }
-                FormatPart::TextPlaceholder => {
-                    format_type = FormatType::Text;
-                }
-                _ => {}
-            }
-        }
-
-        // Determine format type if not already set
-        if format_type == FormatType::General {
-            let has_date = self
-                .parts
-                .iter()
-                .any(|p| matches!(p, FormatPart::DatePart(_)));
-            let has_number = self
-                .parts
-                .iter()
-                .any(|p| matches!(p, FormatPart::Digit(_) | FormatPart::DecimalPoint));
-
-            if has_date || has_ampm || has_elapsed_time {
-                format_type = FormatType::DateTime;
-            } else if has_number {
-                format_type = FormatType::Number;
-            }
-        }
-
-        SectionMetadata {
-            has_ampm,
-            is_hijri,
-            max_subsecond_precision,
-            has_elapsed_time,
-            smallest_time_unit,
-            format_type,
-        }
-    }
-
-    /// Detect and merge fraction patterns in the parts list.
-    /// Looks for patterns like: [digits] "/" [digits] and converts to Fraction
+    /// Tag a complete fraction pattern without rebuilding the source-ordered parts.
     fn detect_fractions(&mut self) {
-        let mut new_parts = Vec::new();
-        let mut i = 0;
+        let Some(matched) =
+            (0..self.parts.len()).find_map(|slash_index| self.analyze_fraction_at(slash_index))
+        else {
+            return;
+        };
 
-        while i < self.parts.len() {
-            // Look for a "/" literal that could be part of a fraction
-            if let Some(slash_pos) = self.find_slash_position(i) {
-                // Check if there are digit placeholders or a fixed number after the slash
-                // Skip any spaces after the slash
-                let mut denom_start = slash_pos + 1;
-                while denom_start < self.parts.len() {
-                    if let FormatPart::Literal(s) = &self.parts[denom_start] {
-                        if s.chars().all(|c| c == ' ') {
-                            denom_start += 1;
-                            continue;
-                        }
-                    }
-                    break;
-                }
-
-                let denom_digits = self.collect_digit_placeholders(denom_start);
-
-                // Also check for fixed denominator (numeric literal)
-                // Need to collect consecutive digit literals/digits to handle multi-digit numbers like "10", "16", etc.
-                let (fixed_denom, fixed_denom_len) = if denom_digits.is_empty() {
-                    let mut num_str = String::new();
-                    let mut count = 0;
-                    for i in denom_start..self.parts.len() {
-                        match &self.parts[i] {
-                            FormatPart::Literal(s) | FormatPart::EscapedLiteral(s)
-                                if s.len() == 1 && s.chars().next().unwrap().is_ascii_digit() =>
-                            {
-                                // Single digit literal like "1", "6"
-                                num_str.push_str(s);
-                                count += 1;
-                            }
-                            FormatPart::Digit(DigitPlaceholder::Zero) => {
-                                // "0" token - can be part of a fixed denominator number
-                                num_str.push('0');
-                                count += 1;
-                            }
-                            _ => {
-                                break;
-                            }
-                        }
-                    }
-                    if !num_str.is_empty() {
-                        (num_str.parse::<u32>().ok(), count)
-                    } else {
-                        (None, 0)
-                    }
-                } else {
-                    (None, 0)
-                };
-
-                if !denom_digits.is_empty() || fixed_denom.is_some() {
-                    // Found denominator, now look for numerator before slash
-                    // Skip any spaces before the slash
-                    let mut num_search_pos = slash_pos;
-                    while num_search_pos > 0 {
-                        if let FormatPart::Literal(s) = &self.parts[num_search_pos - 1] {
-                            if s.chars().all(|c| c == ' ') {
-                                num_search_pos -= 1;
-                                continue;
-                            }
-                        }
-                        break;
-                    }
-
-                    let num_end = num_search_pos;
-                    if num_end > 0 {
-                        let num_digits = self.collect_digit_placeholders_reverse(num_end - 1);
-
-                        if !num_digits.is_empty() {
-                            // Found numerator, now collect any integer part before that
-                            let num_start = num_end - num_digits.len();
-                            let mut int_digits = if num_start > 0 {
-                                self.collect_integer_part(num_start - 1, &mut new_parts)
-                            } else {
-                                Vec::new()
-                            };
-
-                            // Check if this is a mixed fraction or improper fraction
-                            // Mixed fraction: has space between integer and numerator (e.g., "# ??/??")
-                            // Improper fraction: no space, all digits before slash are numerator (e.g., "#0#00??/??")
-                            let has_space_before_numerator = num_start > 0 && {
-                                if let Some(
-                                    FormatPart::Literal(s) | FormatPart::EscapedLiteral(s),
-                                ) = self.parts.get(num_start - 1)
-                                {
-                                    s == " "
-                                } else {
-                                    false
-                                }
-                            };
-
-                            // For improper fractions, combine int_digits and num_digits into numerator
-                            let (final_int_digits, final_num_digits) =
-                                if !has_space_before_numerator && !int_digits.is_empty() {
-                                    // Improper fraction: ALL digits before slash are numerator digits
-                                    int_digits.extend(num_digits);
-                                    (Vec::new(), int_digits)
-                                } else {
-                                    // Mixed fraction: keep them separate
-                                    (int_digits, num_digits)
-                                };
-
-                            // Check for spaces before slash (between numerator and slash)
-                            let space_before_slash = if num_start > 0 && slash_pos > num_start {
-                                if let FormatPart::Literal(s) = &self.parts[slash_pos - 1] {
-                                    if s.chars().all(|c| c == ' ') {
-                                        s.clone()
-                                    } else {
-                                        String::new()
-                                    }
-                                } else {
-                                    String::new()
-                                }
-                            } else {
-                                String::new()
-                            };
-
-                            // Check for spaces after slash (between slash and denominator)
-                            let space_after_slash = if slash_pos + 1 < denom_start {
-                                if let FormatPart::Literal(s) = &self.parts[slash_pos + 1] {
-                                    if s.chars().all(|c| c == ' ') {
-                                        s.clone()
-                                    } else {
-                                        String::new()
-                                    }
-                                } else {
-                                    String::new()
-                                }
-                            } else {
-                                String::new()
-                            };
-
-                            // Create fraction part
-                            let denominator = if let Some(fixed) = fixed_denom {
-                                crate::ast::FractionDenom::Fixed(fixed)
-                            } else {
-                                crate::ast::FractionDenom::UpToDigits(denom_digits.len() as u8)
-                            };
-
-                            let fraction = FormatPart::Fraction {
-                                integer_digits: final_int_digits,
-                                numerator_digits: final_num_digits,
-                                denominator,
-                                space_before_slash,
-                                space_after_slash,
-                            };
-                            new_parts.push(fraction);
-
-                            // Skip past all the parts we consumed
-                            let skip_count = if fixed_denom.is_some() {
-                                fixed_denom_len // Skip all the fixed denominator literals
-                            } else {
-                                denom_digits.len() // Skip all denominator digit placeholders
-                            };
-                            i = denom_start + skip_count;
-                            continue;
-                        }
-                    }
+        for index in matched.integer_indices {
+            let FormatPart::Digit(placeholder) = self.parts[index] else {
+                unreachable!("fraction analysis records only digit placeholders");
+            };
+            self.parts[index] = FormatPart::Fraction(FractionPart::IntegerDigit(placeholder));
+        }
+        for index in matched.numerator_indices {
+            let FormatPart::Digit(placeholder) = self.parts[index] else {
+                unreachable!("fraction analysis records only digit placeholders");
+            };
+            self.parts[index] = FormatPart::Fraction(FractionPart::NumeratorDigit(placeholder));
+        }
+        self.parts[matched.slash_index] = FormatPart::Fraction(FractionPart::Slash);
+        match matched.denominator {
+            MatchedDenominator::Variable(indices) => {
+                for index in indices {
+                    let FormatPart::Digit(placeholder) = self.parts[index] else {
+                        unreachable!("variable denominators contain only placeholders");
+                    };
+                    self.parts[index] =
+                        FormatPart::Fraction(FractionPart::DenominatorDigit(placeholder));
                 }
             }
-
-            // Not part of a fraction, keep the part as-is
-            if i < self.parts.len() {
-                new_parts.push(self.parts[i].clone());
-                i += 1;
+            MatchedDenominator::Fixed(digits) => {
+                for (index, digit) in digits {
+                    self.parts[index] =
+                        FormatPart::Fraction(FractionPart::FixedDenominatorDigit(digit));
+                }
             }
         }
+    }
 
-        self.parts = new_parts;
+    /// Analyze one slash candidate and return only after the full fraction is valid.
+    fn analyze_fraction_at(&self, slash_index: usize) -> Option<FractionMatch> {
+        if !matches!(self.parts.get(slash_index), Some(FormatPart::Literal(text) | FormatPart::EscapedLiteral(text)) if text == "/")
+        {
+            return None;
+        }
+
+        let denominator_start = (slash_index + 1..self.parts.len())
+            .find(|index| !is_fraction_layout_anchor(&self.parts[*index]))?;
+        let denominator = match &self.parts[denominator_start] {
+            FormatPart::Digit(_) => {
+                let indices = self.collect_variable_denominator(denominator_start);
+                (!indices.is_empty()).then_some(MatchedDenominator::Variable(indices))?
+            }
+            part if fixed_denominator_digit(part).is_some() => {
+                MatchedDenominator::Fixed(self.collect_fixed_denominator(denominator_start)?)
+            }
+            _ => return None,
+        };
+
+        let mut pre_slash_digits = Vec::new();
+        let mut index = slash_index;
+        while index > 0 {
+            index -= 1;
+            match &self.parts[index] {
+                FormatPart::Digit(_) => pre_slash_digits.push(index),
+                part if is_fraction_layout_anchor(part) => {}
+                _ => break,
+            }
+        }
+        if pre_slash_digits.is_empty() {
+            return None;
+        }
+        pre_slash_digits.reverse();
+
+        let separator = (pre_slash_digits[0]..*pre_slash_digits.last()?).find(|candidate| {
+            is_literal_space(&self.parts[*candidate])
+                && pre_slash_digits.iter().any(|index| index < candidate)
+                && pre_slash_digits.iter().any(|index| index > candidate)
+        });
+        let (integer_indices, numerator_indices) = if let Some(separator) = separator {
+            pre_slash_digits
+                .into_iter()
+                .partition(|index| *index < separator)
+        } else {
+            (Vec::new(), pre_slash_digits)
+        };
+
+        Some(FractionMatch {
+            integer_indices,
+            numerator_indices,
+            slash_index,
+            denominator,
+        })
+    }
+
+    /// Collect a variable denominator across retained layout anchors.
+    fn collect_variable_denominator(&self, start: usize) -> Vec<usize> {
+        let mut indices = Vec::new();
+        for index in start..self.parts.len() {
+            match &self.parts[index] {
+                FormatPart::Digit(_) => indices.push(index),
+                part if is_fraction_layout_anchor(part) => {}
+                _ => break,
+            }
+        }
+        indices
+    }
+
+    /// Collect and validate every fixed denominator digit atomically.
+    fn collect_fixed_denominator(&self, start: usize) -> Option<Vec<(usize, u8)>> {
+        let mut digits = Vec::new();
+        let mut value = 0_u32;
+        for index in start..self.parts.len() {
+            if let Some(digit) = fixed_denominator_digit(&self.parts[index]) {
+                value = value.checked_mul(10)?.checked_add(u32::from(digit))?;
+                digits.push((index, digit));
+            } else if !is_fraction_layout_anchor(&self.parts[index]) {
+                break;
+            }
+        }
+        (!digits.is_empty()).then_some(digits)
     }
 
     /// Detect and convert subsecond patterns in date formats.
@@ -953,101 +825,32 @@ impl SectionBuilder {
 
         self.parts = new_parts;
     }
+}
 
-    /// Find position of "/" literal starting from index
-    fn find_slash_position(&self, start: usize) -> Option<usize> {
-        for i in start..self.parts.len() {
-            if matches!(&self.parts[i], FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) if s == "/")
-            {
-                return Some(i);
-            }
-        }
-        None
-    }
+/// Return whether a source part may sit between fraction semantic atoms.
+fn is_fraction_layout_anchor(part: &FormatPart) -> bool {
+    matches!(part, FormatPart::Fill(_) | FormatPart::Skip(_)) || is_literal_space(part)
+}
 
-    /// Collect consecutive digit placeholders starting from index
-    fn collect_digit_placeholders(&self, start: usize) -> Vec<DigitPlaceholder> {
-        let mut digits = Vec::new();
-        for i in start..self.parts.len() {
-            if let FormatPart::Digit(d) = &self.parts[i] {
-                digits.push(*d);
+/// Return whether a part is literal whitespace retained in source order.
+fn is_literal_space(part: &FormatPart) -> bool {
+    matches!(part, FormatPart::Literal(text) | FormatPart::EscapedLiteral(text) if !text.is_empty() && text.chars().all(char::is_whitespace))
+}
+
+/// Extract one fixed-denominator source digit, including a parsed `0` token.
+fn fixed_denominator_digit(part: &FormatPart) -> Option<u8> {
+    match part {
+        FormatPart::Literal(text) | FormatPart::EscapedLiteral(text) => {
+            let mut characters = text.chars();
+            let character = characters.next()?;
+            if characters.next().is_none() && character.is_ascii_digit() {
+                Some(character as u8 - b'0')
             } else {
-                break;
+                None
             }
         }
-        digits
-    }
-
-    /// Collect consecutive digit placeholders in reverse from index
-    fn collect_digit_placeholders_reverse(&self, end: usize) -> Vec<DigitPlaceholder> {
-        let mut digits = Vec::new();
-        let mut i = end as isize;
-        while i >= 0 {
-            if let Some(FormatPart::Digit(d)) = self.parts.get(i as usize) {
-                digits.push(*d);
-            } else {
-                break;
-            }
-            i -= 1;
-        }
-        digits.reverse();
-        digits
-    }
-
-    /// Collect integer part before numerator (digits before a space typically)
-    fn collect_integer_part(
-        &self,
-        end: usize,
-        new_parts: &mut Vec<FormatPart>,
-    ) -> Vec<DigitPlaceholder> {
-        let mut int_digits = Vec::new();
-
-        // Scan backwards from end to find digit placeholders
-        let mut i = end as isize;
-        let mut found_space = false;
-
-        while i >= 0 {
-            match &self.parts.get(i as usize) {
-                Some(FormatPart::Digit(d)) => {
-                    int_digits.push(*d);
-                }
-                Some(FormatPart::Literal(s) | FormatPart::EscapedLiteral(s)) if s == " " => {
-                    // Found a space - this indicates a mixed fraction
-                    found_space = true;
-                    if !int_digits.is_empty() {
-                        // Already collected some integer digits, we're done
-                        break;
-                    }
-                    // Haven't collected integer digits yet, continue scanning backwards
-                }
-                Some(FormatPart::ThousandsSeparator) if !int_digits.is_empty() => {
-                    // Allow thousands separator in integer part
-                }
-                Some(FormatPart::Literal(_) | FormatPart::EscapedLiteral(_))
-                    if int_digits.is_empty() =>
-                {
-                    // Haven't started collecting digits yet, and it's not a space, keep this part
-                }
-                _ => {
-                    if !int_digits.is_empty() {
-                        break;
-                    }
-                }
-            }
-            i -= 1;
-        }
-
-        // If we found integer digits, remove them from new_parts
-        if !int_digits.is_empty() && found_space {
-            int_digits.reverse();
-            // Remove parts from where integer starts
-            let remove_from = (i + 1) as usize;
-            new_parts.truncate(remove_from);
-        } else {
-            int_digits.clear();
-        }
-
-        int_digits
+        FormatPart::Digit(DigitPlaceholder::Zero) => Some(0),
+        _ => None,
     }
 }
 
@@ -1202,7 +1005,7 @@ mod tests {
     fn test_parse_single_zero() {
         let fmt = parse("0").unwrap();
         assert_eq!(fmt.sections().len(), 1);
-        assert_eq!(fmt.sections()[0].parts.len(), 1);
+        assert_eq!(fmt.sections()[0].parts().len(), 1);
     }
 
     #[test]

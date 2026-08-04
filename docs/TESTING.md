@@ -69,7 +69,7 @@ TSV fixtures are stored as `.tsv.gz` files and decompressed during tests with `f
 
 11. **ssf_times_tests.rs** - `times.tsv.gz`
     - Tests time, elapsed-time, and subsecond formats
-    - **Status**: 15,726,857/15,728,625 (99.99%) - 1,768 failing
+    - **Status**: 15,728,625/15,728,625 (100%) ✅
 
 ### Not Implemented
 
@@ -78,12 +78,11 @@ TSV fixtures are stored as `.tsv.gz` files and decompressed during tests with `f
 ## Summary
 
 - **Total test cases**: 19,576,922
-- **Total passing**: 19,575,042
-- **Total failing**: 1,772
+- **Total passing**: 19,576,810
+- **Total failing**: 4
 - **Total skipped**: 108
-- **Overall pass rate**: 99.99% of evaluated cases
+- **Overall pass rate**: 99.99998% of evaluated cases
 
 ## Failed Cases
 
 - **Oddities**: 4
-- **Time formatting**: 1,768

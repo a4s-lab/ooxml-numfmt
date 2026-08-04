@@ -1,6 +1,8 @@
 //! AST types for parsed format codes.
 
+use crate::compile::CompiledFormat;
 use crate::error::ParseError;
+use std::fmt;
 use std::str::FromStr;
 
 /// Named colors supported in format codes.
@@ -192,11 +194,28 @@ pub enum ElapsedPart {
     Seconds2,
 }
 
-/// Fraction denominator specification.
+/// A source-ordered semantic component of a fraction format.
+///
+/// Literal spacing and layout directives between these components remain
+/// separate [`FormatPart`] values in the syntax tree. Programmatic sections
+/// without a [`FractionPart::Slash`] are normalized back to ordinary numeric
+/// and literal parts by [`Section::new`], matching parser behavior for format
+/// codes that are not fractions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FractionDenom {
-    UpToDigits(u8),
-    Fixed(u32),
+pub enum FractionPart {
+    /// A digit placeholder belonging to the whole-number portion of a mixed fraction.
+    IntegerDigit(DigitPlaceholder),
+    /// A digit placeholder belonging to the numerator.
+    NumeratorDigit(DigitPlaceholder),
+    /// The fraction slash.
+    Slash,
+    /// A digit placeholder belonging to a variable denominator.
+    DenominatorDigit(DigitPlaceholder),
+    /// One source digit belonging to a fixed denominator.
+    ///
+    /// Programmatic sections must use values from `0` through `9`, and the
+    /// complete fixed denominator must fit in a [`u32`].
+    FixedDenominatorDigit(u8),
 }
 
 /// Locale code from format string.
@@ -230,19 +249,12 @@ pub enum FormatPart {
         /// True to always show sign, false for minus only
         show_plus: bool,
     },
-    /// Fraction format (e.g., # #/# or # ??/??)
-    Fraction {
-        /// Digit placeholders for integer part
-        integer_digits: Vec<DigitPlaceholder>,
-        /// Digit placeholders for numerator
-        numerator_digits: Vec<DigitPlaceholder>,
-        /// Denominator specification (fixed or up to N digits)
-        denominator: FractionDenom,
-        /// Space before slash (for formats like "# ?? / ??")
-        space_before_slash: String,
-        /// Space after slash (for formats like "# ?? / ??")
-        space_after_slash: String,
-    },
+    /// One source-ordered fraction component (for example, a numerator digit or slash).
+    ///
+    /// A complete fraction is represented by multiple `Fraction` parts. Source
+    /// spacing remains represented by [`FormatPart::Literal`], and fixed
+    /// denominator digits remain distinct components.
+    Fraction(FractionPart),
     /// Date/time component
     DatePart(DatePart),
     /// AM/PM indicator
@@ -279,69 +291,8 @@ impl FormatPart {
                 | FormatPart::ThousandsSeparator
                 | FormatPart::Percent
                 | FormatPart::Scientific { .. }
-                | FormatPart::Fraction { .. }
+                | FormatPart::Fraction(_)
         )
-    }
-}
-
-/// Smallest time unit displayed in a format (used for pre-rounding).
-/// Based on SSF's `bt` variable in bits/82_eval.js
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum TimeUnit {
-    /// No time components in format
-    None,
-    /// Hours is the smallest unit (round to nearest minute)
-    Hours,
-    /// Minutes is the smallest unit (round to nearest second)
-    Minutes,
-    /// Seconds is the smallest unit (round to nearest subsecond)
-    Seconds,
-    /// Subseconds displayed (no rounding needed)
-    Subseconds,
-}
-
-/// Type of format for optimization and dispatch
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FormatType {
-    /// General number format or mixed
-    General,
-    /// Date/time format
-    DateTime,
-    /// Pure number format
-    Number,
-    /// Fraction format
-    Fraction,
-    /// Text format
-    Text,
-}
-
-/// Pre-computed metadata about a section to avoid repeated scanning
-#[derive(Debug, Clone, PartialEq)]
-pub struct SectionMetadata {
-    /// True if format contains AM/PM indicator
-    pub has_ampm: bool,
-    /// True if format uses Hijri calendar (B2 prefix)
-    pub is_hijri: bool,
-    /// Maximum subsecond precision (e.g., 3 for .000)
-    pub max_subsecond_precision: Option<u8>,
-    /// True if format contains elapsed time components (`[h]`, `[m]`, `[s]`)
-    pub has_elapsed_time: bool,
-    /// Smallest time unit displayed (for pre-rounding)
-    pub smallest_time_unit: TimeUnit,
-    /// Primary format type
-    pub format_type: FormatType,
-}
-
-impl Default for SectionMetadata {
-    fn default() -> Self {
-        Self {
-            has_ampm: false,
-            is_hijri: false,
-            max_subsecond_precision: None,
-            has_elapsed_time: false,
-            smallest_time_unit: TimeUnit::None,
-            format_type: FormatType::General,
-        }
     }
 }
 
@@ -355,31 +306,97 @@ impl Default for SectionMetadata {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Section {
     /// Optional condition for this section (e.g., `[>100]`)
-    pub condition: Option<Condition>,
+    condition: Option<Condition>,
     /// Optional color for this section (e.g., `[Red]`)
-    pub color: Option<Color>,
+    color: Option<Color>,
     /// The format parts that make up this section
-    pub parts: Vec<FormatPart>,
-    /// Pre-computed metadata to avoid repeated scanning
-    pub metadata: SectionMetadata,
+    parts: Vec<FormatPart>,
 }
 
 impl Section {
+    /// Create a section from optional selectors and semantic syntax parts.
+    ///
+    /// When multiple fill directives are supplied, only the final directive is
+    /// retained at its original position, matching parser normalization.
+    /// Fraction components without a slash are restored to ordinary numeric
+    /// placeholders and literals rather than treated as fraction syntax.
+    pub fn new(
+        condition: Option<Condition>,
+        color: Option<Color>,
+        mut parts: Vec<FormatPart>,
+    ) -> Self {
+        if !parts
+            .iter()
+            .any(|part| matches!(part, FormatPart::Fraction(FractionPart::Slash)))
+        {
+            for part in &mut parts {
+                let replacement = match part {
+                    FormatPart::Fraction(
+                        FractionPart::IntegerDigit(placeholder)
+                        | FractionPart::NumeratorDigit(placeholder)
+                        | FractionPart::DenominatorDigit(placeholder),
+                    ) => Some(FormatPart::Digit(*placeholder)),
+                    FormatPart::Fraction(FractionPart::FixedDenominatorDigit(digit)) => {
+                        Some(FormatPart::Literal(digit.to_string()))
+                    }
+                    _ => None,
+                };
+                if let Some(replacement) = replacement {
+                    *part = replacement;
+                }
+            }
+        }
+
+        if let Some(final_fill_index) = parts
+            .iter()
+            .rposition(|part| matches!(part, FormatPart::Fill(_)))
+        {
+            let mut index = 0;
+            parts.retain(|part| {
+                let retain = !matches!(part, FormatPart::Fill(_)) || index == final_fill_index;
+                index += 1;
+                retain
+            });
+        }
+        Self {
+            condition,
+            color,
+            parts,
+        }
+    }
+
+    /// Return this section's optional selection condition.
+    pub fn condition(&self) -> Option<Condition> {
+        self.condition
+    }
+
+    /// Return this section's optional display color.
+    pub fn color(&self) -> Option<Color> {
+        self.color
+    }
+
+    /// Return the normalized syntax parts in source-relative order.
+    pub fn parts(&self) -> &[FormatPart] {
+        &self.parts
+    }
+
     /// Returns true if this section contains any date/time parts.
     pub fn has_date_parts(&self) -> bool {
-        self.parts.iter().any(|p| p.is_date_part())
+        self.parts().iter().any(|p| p.is_date_part())
     }
 
     /// Returns true if this section contains a text placeholder.
     pub fn has_text_placeholder(&self) -> bool {
-        self.parts
+        self.parts()
             .iter()
             .any(|p| matches!(p, FormatPart::TextPlaceholder))
     }
 
     /// Returns true if this section contains a percent sign.
     pub fn has_percent(&self) -> bool {
-        self.parts.iter().any(|p| matches!(p, FormatPart::Percent))
+        self.parts()
+            .iter()
+            .any(|p| matches!(p, FormatPart::Percent))
     }
 }
 
@@ -387,21 +404,48 @@ impl Section {
 ///
 /// This is the main type returned by parsing. It can be reused to format
 /// multiple values efficiently.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone)]
 pub struct NumberFormat {
-    sections: Vec<Section>,
+    sections: Box<[Section]>,
+    pub(crate) compiled: CompiledFormat,
+}
+
+impl PartialEq for NumberFormat {
+    fn eq(&self, other: &Self) -> bool {
+        self.sections == other.sections
+    }
+}
+
+impl fmt::Debug for NumberFormat {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("NumberFormat")
+            .field("sections", &self.sections)
+            .finish()
+    }
 }
 
 impl NumberFormat {
-    /// Create a NumberFormat from parsed sections.
-    /// Limits to 4 sections maximum per Excel spec.
-    pub fn from_sections(sections: Vec<Section>) -> Self {
+    /// Create a `NumberFormat` from programmatically supplied sections.
+    ///
+    /// At most four sections are retained, matching Excel's section limit.
+    /// Explicit [`FractionPart`] components are validated before the compiled
+    /// execution plan is created.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError::InvalidFraction`] when a complete fraction contains
+    /// a non-decimal fixed-denominator component or has a fixed denominator
+    /// larger than [`u32::MAX`].
+    pub fn from_sections(sections: Vec<Section>) -> Result<Self, ParseError> {
         let sections = if sections.len() > 4 {
             sections.into_iter().take(4).collect()
         } else {
             sections
         };
-        NumberFormat { sections }
+        let sections = sections.into_boxed_slice();
+        let compiled = CompiledFormat::new(&sections)?;
+        Ok(NumberFormat { sections, compiled })
     }
 
     /// Get the sections of this format.
@@ -411,12 +455,16 @@ impl NumberFormat {
 
     /// Returns true if this format contains date/time parts.
     pub fn is_date_format(&self) -> bool {
-        self.sections.iter().any(|s| s.has_date_parts())
+        self.compiled
+            .sections
+            .iter()
+            .any(|plan| plan.kind == crate::compile::SectionKind::DateTime)
     }
 
     /// Returns true if this is a text-only format.
     pub fn is_text_format(&self) -> bool {
-        self.sections.len() == 1 && self.sections[0].has_text_placeholder()
+        self.compiled.sections.len() == 1
+            && self.compiled.sections[0].kind == crate::compile::SectionKind::Text
     }
 
     /// Returns true if this format contains a percent sign.
@@ -426,12 +474,18 @@ impl NumberFormat {
 
     /// Returns true if any section has a color.
     pub fn has_color(&self) -> bool {
-        self.sections.iter().any(|s| s.color.is_some())
+        self.compiled
+            .sections
+            .iter()
+            .any(|plan| plan.color.is_some())
     }
 
     /// Returns true if any section has a condition.
     pub fn has_condition(&self) -> bool {
-        self.sections.iter().any(|s| s.condition.is_some())
+        self.compiled
+            .sections
+            .iter()
+            .any(|plan| plan.condition.is_some())
     }
 
     /// Parse a format code string into a NumberFormat.

@@ -1,33 +1,40 @@
 //! Date and time formatting
 
-use crate::ast::{AmPmStyle, DatePart, ElapsedPart, FormatPart, Section};
+use crate::ast::{AmPmStyle, DatePart, ElapsedPart, FormatPart};
+use crate::compile::{Operation, SectionPlan, TimeUnit};
 use crate::date_serial::{serial_to_date, serial_to_weekday};
 use crate::error::FormatError;
 use crate::locale::Locale;
 use crate::options::FormatOptions;
 
-/// Format a value as a date/time using the given section.
-pub fn format_date(
+use super::render::RenderPart;
+
+/// Evaluate a value as date/time fragments without resolving layout.
+pub(super) fn evaluate_date(
     value: f64,
-    section: &Section,
+    plan: &SectionPlan,
     opts: &FormatOptions,
-) -> Result<String, FormatError> {
+) -> Result<Vec<RenderPart>, FormatError> {
     // SSF returns empty string for out-of-range dates (< 0 or > 2958465)
     // This matches Excel's behavior - see bits/35_datecode.js line 2
     if !(0.0..=2958465.0).contains(&value) {
-        return Ok(String::new());
+        return Ok(Vec::new());
     }
 
-    // Use pre-computed metadata instead of scanning parts
-    // Metadata is computed once during parsing for better performance
-    let is_hijri = section.metadata.is_hijri;
-    let has_ampm = section.metadata.has_ampm;
+    // Date properties are compiled once instead of rescanned for every value.
+    let is_hijri = plan.date.is_hijri;
+    let has_ampm = plan.date.has_ampm;
 
     // Check if there are multiple SubSecond parts (still need to scan for this specific case)
-    let has_multiple_subseconds = section
-        .parts
+    let has_multiple_subseconds = plan
+        .operations
         .iter()
-        .filter(|p| matches!(p, FormatPart::DatePart(DatePart::SubSecond(_))))
+        .filter(|operation| {
+            matches!(
+                operation,
+                Operation::Semantic(FormatPart::DatePart(DatePart::SubSecond(_)))
+            )
+        })
         .count()
         > 1;
 
@@ -80,7 +87,7 @@ pub fn format_date(
 
     // Get time components
     // Only round seconds when there's no subsecond display in the format
-    let has_subseconds = section.metadata.max_subsecond_precision.is_some();
+    let has_subseconds = plan.date.max_subsecond_precision.is_some();
     let (mut hour, mut minute, mut second) =
         crate::date_serial::serial_to_time_with_rounding(adjusted_value, !has_subseconds);
 
@@ -99,8 +106,8 @@ pub fn format_date(
             &mut minute,
             &mut second,
             subseconds,
-            section.metadata.smallest_time_unit,
-            section.metadata.max_subsecond_precision,
+            plan.date.smallest_time_unit,
+            plan.date.max_subsecond_precision,
         );
     }
 
@@ -109,63 +116,29 @@ pub fn format_date(
     // Even for value 0, Excel calculates it as Saturday (day before Jan 1, 1900)
     let weekday = serial_to_weekday(value, opts.date_system);
 
-    // Build the formatted string
-    let mut result = String::new();
-
-    for part in &section.parts {
-        match part {
-            FormatPart::DatePart(date_part) => {
-                let formatted = format_date_part(
-                    *date_part,
-                    year,
-                    month,
-                    day,
-                    hour,
-                    minute,
-                    second,
-                    weekday,
-                    has_ampm,
-                    value, // Pass the original serial value for fractional seconds
-                    has_multiple_subseconds,
-                    &opts.locale,
-                );
-                result.push_str(&formatted);
-            }
-            FormatPart::AmPm(style) => {
-                let formatted = format_ampm(*style, hour, &opts.locale);
-                result.push_str(&formatted);
-            }
-            FormatPart::Elapsed(elapsed_part) => {
-                let formatted = format_elapsed(*elapsed_part, adjusted_value);
-                result.push_str(&formatted);
-            }
-            FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => {
-                result.push_str(s);
-            }
-            FormatPart::Skip(c) => {
-                // Skip width of character - add a space for alignment
-                result.push(*c);
-            }
-            FormatPart::Fill(_) => {
-                // Fill characters are handled at a higher level
-                // For now, just skip
-            }
-            FormatPart::ThousandsSeparator => {
-                // In date formats, the thousands separator (,) is just a literal comma
-                result.push(opts.locale.thousands_separator);
-            }
-            FormatPart::DecimalPoint => {
-                // In date formats, the decimal point is just a literal
-                result.push(opts.locale.decimal_separator);
-            }
-            _ => {
-                // Other parts (e.g., numeric) are not expected in date formats
-                // but we'll ignore them silently
-            }
-        }
-    }
-
-    Ok(result)
+    // Evaluate semantic fields while the common executor retains layout operations.
+    Ok(super::evaluate_operations(plan, |_, part| match part {
+        FormatPart::DatePart(date_part) => Some(format_date_part(
+            *date_part,
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+            weekday,
+            has_ampm,
+            value, // Pass the original serial value for fractional seconds
+            has_multiple_subseconds,
+            &opts.locale,
+        )),
+        FormatPart::AmPm(style) => Some(format_ampm(*style, hour, &opts.locale)),
+        FormatPart::Elapsed(elapsed_part) => Some(format_elapsed(*elapsed_part, adjusted_value)),
+        // In date formats separators remain locale-aware literal characters.
+        FormatPart::ThousandsSeparator => Some(opts.locale.thousands_separator.to_string()),
+        FormatPart::DecimalPoint => Some(opts.locale.decimal_separator.to_string()),
+        _ => None,
+    }))
 }
 
 /// Format a single date/time part.
@@ -275,8 +248,9 @@ fn format_date_part(
                     // Multiple subsecond displays: truncate for consistency
                     (high_precision * multiplier as f64) as u32 % multiplier
                 } else {
-                    // Single subsecond display: round
-                    ((high_precision * multiplier as f64).round() as u32) % multiplier
+                    // Single subsecond display: use the same rounding operation as
+                    // the whole-second carry check.
+                    rounded_subsecond_digits(subsecond_fraction, places) % multiplier
                 };
                 format!("{:0width$}", subsec, width = places as usize)
             }
@@ -338,11 +312,9 @@ fn apply_time_prerounding(
     minute: &mut u32,
     second: &mut u32,
     subseconds: f64,
-    smallest_unit: crate::ast::TimeUnit,
+    smallest_unit: TimeUnit,
     subsecond_precision: Option<u8>,
 ) {
-    use crate::ast::TimeUnit;
-
     match smallest_unit {
         TimeUnit::Hours => {
             // Round subseconds -> seconds -> minutes -> hours
@@ -402,14 +374,12 @@ fn apply_time_prerounding(
             *second = sec as u32;
         }
         TimeUnit::Subseconds => {
-            // For subsecond display, check if the subseconds would round up to the next second
-            // based on the display precision.
-            // For n decimal places, threshold = 1 - 0.5 * 10^(-n)
-            // e.g., .0 (1 place): 0.95 rounds to 1.0
-            //       .00 (2 places): 0.995 rounds to 1.00
+            // Carry exactly when rendering at this precision rounds the fractional
+            // digits to a complete second. Comparing rounded digits avoids a
+            // floating-point threshold mismatch at values such as 0.95.
             if let Some(precision) = subsecond_precision {
-                let threshold = 1.0 - 0.5 * 10_f64.powi(-(precision as i32));
-                if subseconds >= threshold {
+                let multiplier = 10_u32.pow(precision as u32);
+                if rounded_subsecond_digits(subseconds, precision) >= multiplier {
                     let mut sec = *second as i64 + 1;
                     if sec >= 60 {
                         sec %= 60;
@@ -507,6 +477,16 @@ fn format_elapsed(part: ElapsedPart, serial_value: f64) -> String {
             }
         }
     }
+}
+
+/// Round a fractional second into the integer digits shown at `precision`.
+///
+/// The initial four-place normalization matches SSF's handling of floating-point
+/// noise and is shared by fractional rendering and whole-second carry detection.
+fn rounded_subsecond_digits(subseconds: f64, precision: u8) -> u32 {
+    let multiplier = 10_u32.pow(precision as u32);
+    let normalized = (subseconds * 10000.0).round() / 10000.0;
+    (normalized * multiplier as f64).round() as u32
 }
 
 #[cfg(test)]

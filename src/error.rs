@@ -2,7 +2,7 @@
 
 use thiserror::Error;
 
-/// Errors that can occur when parsing a format code.
+/// Errors that can occur when parsing or programmatically constructing a format code.
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum ParseError {
     #[error("unexpected token at position {position}: found '{found}'")]
@@ -25,6 +25,15 @@ pub enum ParseError {
 
     #[error("invalid format ID: {0} is not a recognized built-in format")]
     InvalidFormatId(u32),
+
+    /// A programmatically supplied fraction section violates fraction invariants.
+    #[error("invalid fraction in section {section_index}: {reason}")]
+    InvalidFraction {
+        /// Zero-based index of the invalid section.
+        section_index: usize,
+        /// Description of the invalid fraction syntax.
+        reason: &'static str,
+    },
 }
 
 /// Errors that can occur when formatting a value.
@@ -41,4 +50,11 @@ pub enum FormatError {
 
     #[error("invalid serial number: {value}")]
     InvalidSerialNumber { value: f64 },
+
+    /// The requested layout cannot fit in a Rust string.
+    #[error("formatted output is too large for fill count {fill_count}")]
+    OutputTooLarge {
+        /// Fill repetition count that caused the output-size failure.
+        fill_count: usize,
+    },
 }

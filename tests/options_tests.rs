@@ -4,6 +4,7 @@ use ooxml_numfmt::{DateSystem, FormatOptions};
 fn test_default_options() {
     let opts = FormatOptions::default();
     assert_eq!(opts.date_system, DateSystem::Date1900);
+    assert_eq!(opts.fill_count, 0);
 }
 
 #[test]

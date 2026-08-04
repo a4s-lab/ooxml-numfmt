@@ -27,6 +27,17 @@ fn test_format_time() {
 }
 
 #[test]
+fn test_format_time_subsecond_rounding_carries_to_seconds() {
+    let opts = FormatOptions::default();
+
+    let tenths = NumberFormat::parse("ss.0").unwrap();
+    assert_eq!(tenths.format(0.001886, &opts), "43.0");
+
+    let hundredths = NumberFormat::parse("ss.00").unwrap();
+    assert_eq!(hundredths.format(0.012118, &opts), "27.00");
+}
+
+#[test]
 fn test_format_time_ampm() {
     let fmt = NumberFormat::parse("h:mm AM/PM").unwrap();
     let opts = FormatOptions::default();

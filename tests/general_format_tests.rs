@@ -10,6 +10,16 @@ fn test_general_format_parse() {
 }
 
 #[test]
+fn test_general_format_parse_mixed() {
+    assert_eq!(format_default(42.0, "\"USD \"General").unwrap(), "USD 42");
+    assert_eq!(format_default(42.0, "General\" USD\"").unwrap(), "42 USD");
+    assert_eq!(
+        format_default(42.0, "\"pre\"General\"post\"").unwrap(),
+        "pre42post"
+    );
+}
+
+#[test]
 fn test_general_format_integers() {
     assert_eq!(format_default(0.0, "General").unwrap(), "0");
     assert_eq!(format_default(1.0, "General").unwrap(), "1");

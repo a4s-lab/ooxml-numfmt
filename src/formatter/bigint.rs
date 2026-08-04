@@ -4,10 +4,13 @@
 //! For values within the safe range, the regular f64 formatting path is used.
 //! For values outside the safe range, string-based arithmetic is used to preserve precision.
 
-use crate::ast::{FormatPart, Section};
+use crate::ast::FormatPart;
+use crate::compile::{SectionKind, SectionPlan};
 use crate::error::FormatError;
 use crate::options::FormatOptions;
 use num_bigint::BigInt;
+
+use super::render::RenderPart;
 
 /// The maximum safe integer value for f64 (2^53 - 1)
 pub const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
@@ -21,185 +24,64 @@ pub fn is_safe_integer(n: &BigInt) -> bool {
     n >= &min_safe && n <= &max_safe
 }
 
-/// Format a BigInt value according to a format section.
-///
-/// For values within safe f64 range, converts to f64 and uses standard formatting.
-/// For values outside safe range, uses string-based formatting to preserve precision.
-pub fn format_bigint(
+/// Evaluate a large BigInt through a compiled plan without resolving layout.
+pub(super) fn evaluate_bigint(
     value: &BigInt,
-    section: &Section,
+    plan: &SectionPlan,
     opts: &FormatOptions,
-) -> Result<String, FormatError> {
-    // Check if value is within safe f64 range
-    if is_safe_integer(value) {
-        // Convert to f64 and use standard formatting
-        let float_val: f64 = value.to_string().parse().unwrap_or(0.0);
-        return super::format_number(float_val, section, opts);
+) -> Result<Vec<RenderPart>, FormatError> {
+    match plan.kind {
+        SectionKind::Number => evaluate_compiled_number(value, plan, opts),
+        SectionKind::General => Ok(super::evaluate_operations(plan, |_, part| match part {
+            FormatPart::GeneralNumber => Some(value.to_string()),
+            FormatPart::Locale(locale) => locale.currency.clone(),
+            FormatPart::Percent => Some("%".to_string()),
+            _ => None,
+        })),
+        SectionKind::Literal | SectionKind::Text => {
+            let mut numeric_text = (plan.kind == SectionKind::Text).then(|| value.to_string());
+            Ok(super::evaluate_operations(plan, |_, part| match part {
+                FormatPart::TextPlaceholder => numeric_text.take(),
+                FormatPart::Locale(locale) => locale.currency.clone(),
+                FormatPart::Percent => Some("%".to_string()),
+                _ => None,
+            }))
+        }
+        SectionKind::DateTime => Err(FormatError::TypeMismatch {
+            expected: "numeric format",
+            got: "date format with BigInt value",
+        }),
+        SectionKind::Scientific | SectionKind::Fraction => Err(FormatError::TypeMismatch {
+            expected: "standard numeric format",
+            got: "precision-dependent BigInt format",
+        }),
     }
-
-    // For large integers, use string-based formatting
-    format_large_bigint(value, section, opts)
 }
 
-/// Format a BigInt value that exceeds f64's safe integer range.
-/// Uses string-based arithmetic to preserve precision.
-fn format_large_bigint(
+/// Apply compiled percentage and scaling semantics using exact BigInt arithmetic.
+fn evaluate_compiled_number(
     value: &BigInt,
-    section: &Section,
+    plan: &SectionPlan,
     opts: &FormatOptions,
-) -> Result<String, FormatError> {
-    use num_bigint::Sign;
-
-    let is_negative = value.sign() == Sign::Minus;
-    let abs_value = if is_negative {
+) -> Result<Vec<RenderPart>, FormatError> {
+    let spec = plan.number.as_ref().ok_or(FormatError::TypeMismatch {
+        expected: "compiled number format",
+        got: "non-number section",
+    })?;
+    let mut adjusted = if value.sign() == num_bigint::Sign::Minus {
         -value.clone()
     } else {
         value.clone()
     };
 
-    // Analyze the format to understand what we need to do
-    let analysis = super::number::analyze_format(section);
-
-    // Apply thousands scaling (trailing commas divide by 1000 each)
-    let scaled_value = if analysis.thousands_scale > 0 {
-        let divisor = BigInt::from(1000_u64).pow(analysis.thousands_scale as u32);
-        &abs_value / &divisor
-    } else {
-        abs_value.clone()
-    };
-
-    // Convert to string for formatting
-    let value_str = scaled_value.to_string();
-
-    // Format the integer part
-    let formatted_integer = format_bigint_integer(
-        &value_str,
-        &analysis.integer_placeholders,
-        analysis.has_thousands_separator,
-        &analysis.inline_literals,
-        opts,
-    );
-
-    // Handle decimal places (for BigInt, decimal part is always 0)
-    let decimal_places = analysis.decimal_places();
-    let formatted = if decimal_places > 0 {
-        let zeros = "0".repeat(decimal_places);
-        format!(
-            "{}{}{}",
-            formatted_integer, opts.locale.decimal_separator, zeros
-        )
-    } else {
-        formatted_integer
-    };
-
-    // Build prefix
-    let mut result = String::new();
-    for part in &analysis.prefix_parts {
-        match part {
-            FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => result.push_str(s),
-            FormatPart::Locale(locale_code) => {
-                if let Some(ref currency) = locale_code.currency {
-                    result.push_str(currency);
-                }
-            }
-            FormatPart::Percent => result.push('%'),
-            _ => {}
-        }
+    if spec.percent_count > 0 {
+        adjusted *= BigInt::from(100_u8).pow(spec.percent_count as u32);
+    }
+    if spec.thousands_scale > 0 {
+        adjusted /= BigInt::from(1000_u16).pow(spec.thousands_scale as u32);
     }
 
-    // Add the formatted number
-    result.push_str(&formatted);
-
-    // Build suffix
-    for part in &analysis.suffix_parts {
-        match part {
-            FormatPart::Literal(s) | FormatPart::EscapedLiteral(s) => result.push_str(s),
-            FormatPart::Locale(locale_code) => {
-                if let Some(ref currency) = locale_code.currency {
-                    result.push_str(currency);
-                }
-            }
-            FormatPart::Percent => result.push('%'),
-            _ => {}
-        }
-    }
-
-    Ok(result)
-}
-
-/// Format the integer part of a BigInt as a string.
-fn format_bigint_integer(
-    value_str: &str,
-    placeholders: &[crate::ast::DigitPlaceholder],
-    use_thousands: bool,
-    inline_literals: &[(usize, String)],
-    opts: &FormatOptions,
-) -> String {
-    let value_digits: Vec<char> = value_str.chars().collect();
-
-    let min_digits = placeholders.iter().filter(|p| p.is_required()).count();
-    let output_len = value_digits.len().max(min_digits);
-
-    // Build right-to-left into Vec, then reverse once
-    let separator_count = if use_thousands { output_len / 3 } else { 0 };
-    let literal_chars: usize = inline_literals.iter().map(|(_, s)| s.len()).sum();
-    let estimated_capacity = output_len + separator_count + literal_chars;
-    let mut chars = Vec::with_capacity(estimated_capacity);
-
-    // Process from right to left (least significant first)
-    for (digit_count, pos_from_right) in (0..output_len).enumerate() {
-        let digit_index = value_digits.len() as isize - 1 - pos_from_right as isize;
-
-        // Add thousands separator if needed (but not at position 0)
-        if use_thousands && digit_count > 0 && digit_count % 3 == 0 {
-            chars.push(opts.locale.thousands_separator);
-        }
-
-        // Check if there's an inline literal at this position
-        let literals_at_pos: Vec<&str> = inline_literals
-            .iter()
-            .filter(|(pos, _)| *pos == pos_from_right)
-            .map(|(_, s)| s.as_str())
-            .collect();
-
-        for literal_str in literals_at_pos.iter().rev() {
-            for ch in literal_str.chars().rev() {
-                chars.push(ch);
-            }
-        }
-
-        if digit_index >= 0 {
-            // We have a digit from the value
-            chars.push(value_digits[digit_index as usize]);
-        } else {
-            // Use placeholder's empty character for padding
-            let placeholder_index = placeholders.len() as isize - 1 - pos_from_right as isize;
-            if placeholder_index >= 0 {
-                let placeholder = placeholders[placeholder_index as usize];
-                if let Some(c) = placeholder.empty_char() {
-                    chars.push(c);
-                }
-            }
-        }
-    }
-
-    // Handle the case where we have no digits but need at least one
-    if chars.is_empty() && placeholders.iter().any(|p| p.is_required()) {
-        chars.push('0');
-    }
-
-    // Push any inline literals that are at positions beyond what we formatted
-    for (literal_pos, literal_str) in inline_literals {
-        if *literal_pos >= output_len {
-            for ch in literal_str.chars().rev() {
-                chars.push(ch);
-            }
-        }
-    }
-
-    // Reverse and collect into String
-    chars.reverse();
-    chars.into_iter().collect()
+    super::number::evaluate_integer_digits(&adjusted.to_string(), plan, opts)
 }
 
 /// Fallback formatting for BigInt values.
@@ -236,5 +118,69 @@ mod tests {
     fn test_fallback_format_bigint() {
         let big = BigInt::parse_bytes(b"123456822333333000", 10).unwrap();
         assert_eq!(fallback_format_bigint(&big), "123456822333333000");
+    }
+
+    #[test]
+    fn evaluates_large_values_with_the_compiled_number_spec() {
+        let value = BigInt::parse_bytes(b"123456789012345678", 10).unwrap();
+        let format = crate::NumberFormat::parse("$#,##0.00").unwrap();
+
+        assert_eq!(
+            format
+                .try_format_bigint(&value, &FormatOptions::default())
+                .unwrap(),
+            "$123,456,789,012,345,678.00"
+        );
+    }
+
+    #[test]
+    fn repeated_text_placeholders_render_bigint_once() {
+        let value = BigInt::parse_bytes(b"123456789012345678", 10).unwrap();
+        let format = crate::NumberFormat::parse("@@").unwrap();
+
+        assert_eq!(
+            format.format_bigint(&value, &FormatOptions::default()),
+            "123456789012345678"
+        );
+    }
+
+    #[test]
+    fn renders_bigint_before_decimal_without_integer_placeholder() {
+        let value = BigInt::from(42);
+        let format = crate::NumberFormat::parse(".00").unwrap();
+
+        assert_eq!(
+            format.format_bigint(&value, &FormatOptions::default()),
+            "42.00"
+        );
+    }
+
+    #[test]
+    fn preserves_fill_inside_large_integer_placeholders() {
+        let value = BigInt::parse_bytes(b"123456789012345678", 10).unwrap();
+        let format = crate::NumberFormat::parse("0*x0").unwrap();
+        let plan = &format.compiled.sections[0];
+        let parts = evaluate_bigint(&value, plan, &FormatOptions::default()).unwrap();
+
+        assert_eq!(
+            super::super::render::resolve_layout(&parts, 3).unwrap(),
+            "12345678901234567xxx8"
+        );
+    }
+
+    #[test]
+    fn applies_bigint_percentage_and_scaling_exactly() {
+        let value = BigInt::parse_bytes(b"123456789012345678", 10).unwrap();
+        let percent = crate::NumberFormat::parse("0%").unwrap();
+        let scaled = crate::NumberFormat::parse("0,,").unwrap();
+
+        assert_eq!(
+            percent.format_bigint(&value, &FormatOptions::default()),
+            "12345678901234567800%"
+        );
+        assert_eq!(
+            scaled.format_bigint(&value, &FormatOptions::default()),
+            "123456789012"
+        );
     }
 }

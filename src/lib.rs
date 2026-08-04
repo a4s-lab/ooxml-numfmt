@@ -42,6 +42,10 @@
 //! - `mm` - Two-digit minute (after hour)
 //! - `ss` - Two-digit second
 //!
+//! ### Fill Directives
+//! - `*x` - Repeat `x` exactly `FormatOptions::fill_count` times
+//! - `_x` - Emit one plain-text space as a width approximation
+//!
 //! ## Feature Flags
 //!
 //! - `chrono` (default) - Enable chrono type support
@@ -57,6 +61,7 @@ pub mod date_serial;
 mod hijri;
 
 mod cache;
+mod compile;
 mod formatter;
 mod locale;
 pub mod parser;
