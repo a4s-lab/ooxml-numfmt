@@ -72,7 +72,7 @@ fn prepare_scientific_fields(
 
     let integer_places = spec.mantissa_integer.len().max(1);
     let decimal_places = spec.mantissa_decimal.len();
-    let (mantissa, exponent) = if adjusted == 0.0 {
+    let (mantissa, mut exponent) = if adjusted == 0.0 {
         (0.0, 0)
     } else {
         let base_exponent = adjusted.log10().floor() as i32;
@@ -85,11 +85,26 @@ fn prepare_scientific_fields(
         };
         (adjusted / 10_f64.powi(exponent), exponent)
     };
-    let mantissa_text = if decimal_places > 0 {
+    let mut mantissa_text = if decimal_places > 0 {
         format!("{mantissa:.decimal_places$}")
     } else {
         format!("{mantissa:.0}")
     };
+    let rounded_integer = mantissa_text
+        .split_once('.')
+        .map_or(mantissa_text.as_str(), |(integer, _)| integer);
+    if rounded_integer.bytes().all(|byte| byte.is_ascii_digit())
+        && rounded_integer.len() > integer_places
+    {
+        // Rounding can carry the mantissa into the next exponent group. Move
+        // it back into range before assigning digits to source placeholders.
+        exponent += integer_places as i32;
+        mantissa_text = if decimal_places > 0 {
+            format!("{:.decimal_places$}", 1.0)
+        } else {
+            "1".to_string()
+        };
+    }
     let (mantissa_integer, mantissa_decimal) = mantissa_text
         .split_once('.')
         .map_or((mantissa_text.as_str(), ""), |parts| parts);
@@ -122,7 +137,7 @@ fn prepare_scientific_fields(
     fields
 }
 
-/// Assign text right-to-left across placeholder operations, keeping overflow leftmost.
+/// Assign text right-to-left with placeholder padding and overflow kept leftmost.
 fn assign_right_aligned(
     text: &str,
     placeholders: &[NumberPlaceholder],
@@ -133,6 +148,13 @@ fn assign_right_aligned(
     }
 
     let characters: Vec<char> = text.chars().collect();
+    let missing = placeholders.len().saturating_sub(characters.len());
+    for placeholder in &placeholders[..missing] {
+        if let Some(character) = placeholder.placeholder.empty_char() {
+            fields[placeholder.operation_index] = Some(character.to_string());
+        }
+    }
+
     let extra = characters.len().saturating_sub(placeholders.len());
     if extra > 0 {
         fields[placeholders[0].operation_index] = Some(characters[..extra].iter().collect());
@@ -443,6 +465,27 @@ mod tests {
         assert_eq!(
             super::super::render::resolve_layout(&parts, 3).unwrap(),
             "1.2xxxE+02"
+        );
+    }
+
+    #[test]
+    fn renormalizes_scientific_mantissa_after_rounding() {
+        let format = crate::NumberFormat::parse("0*x.0E+0").unwrap();
+        let plan = &format.compiled.sections[0];
+        let parts = evaluate_scientific(9.96, plan, &FormatOptions::default()).unwrap();
+
+        assert_eq!(
+            super::super::render::resolve_layout(&parts, 3).unwrap(),
+            "1xxx.0E+1"
+        );
+
+        let format = crate::NumberFormat::parse("0*x0.0E+0").unwrap();
+        let plan = &format.compiled.sections[0];
+        let parts = evaluate_scientific(99.96, plan, &FormatOptions::default()).unwrap();
+
+        assert_eq!(
+            super::super::render::resolve_layout(&parts, 3).unwrap(),
+            "0xxx1.0E+2"
         );
     }
 }
