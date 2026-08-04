@@ -19,6 +19,7 @@ fn test_format_decimal() {
 }
 
 #[test]
+#[allow(clippy::approx_constant)]
 fn test_format_decimal_without_integer_placeholder() {
     let opts = FormatOptions::default();
 
