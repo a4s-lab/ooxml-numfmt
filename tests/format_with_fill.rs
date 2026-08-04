@@ -245,6 +245,60 @@ fn test_fill_text() {
 }
 
 #[test]
+fn test_text_fill_position_tracks_evaluated_text_output() {
+    let trailing = NumberFormat::parse("@*-").unwrap();
+    assert_eq!(trailing.text_fill_position("first"), Some((5, '-')));
+    assert_eq!(trailing.text_fill_position("first\nsecond"), Some((5, '-')));
+    assert_eq!(
+        trailing.text_fill_position("first\r\nsecond"),
+        Some((5, '-'))
+    );
+
+    let repeated = NumberFormat::parse("@@\"long\"*-").unwrap();
+    assert_eq!(repeated.text_fill_position("a\nb"), Some((10, '-')));
+    assert_eq!(
+        format_text_with_fill("@@\"long\"*-", "a\nb", 0),
+        "a\nba\nblong"
+    );
+
+    let between = NumberFormat::parse("@*-@").unwrap();
+    assert_eq!(between.text_fill_position("a\nb"), Some((3, '-')));
+}
+
+#[test]
+fn test_text_fill_position_uses_utf8_output_offsets() {
+    let format = NumberFormat::parse("\"é\"@_界*界").unwrap();
+    let fill_free = format_text_with_fill("\"é\"@_界*界", "값", 0);
+    let filled = format_text_with_fill("\"é\"@_界*界", "값", 3);
+    let (offset, character) = format.text_fill_position("값").unwrap();
+
+    assert_eq!(fill_free, "é값 ");
+    assert_eq!((offset, character), (6, '界'));
+    assert!(fill_free.is_char_boundary(offset));
+    assert_eq!(
+        filled,
+        format!(
+            "{}{}{}",
+            &fill_free[..offset],
+            character.to_string().repeat(3),
+            &fill_free[offset..]
+        )
+    );
+}
+
+#[test]
+fn test_text_fill_position_follows_text_section_selection_and_normalization() {
+    let fourth = NumberFormat::parse("0;0;0;\"text\"*-").unwrap();
+    assert_eq!(fourth.text_fill_position("ignored"), Some((4, '-')));
+
+    let unselected = NumberFormat::parse("\"text\"*-").unwrap();
+    assert_eq!(unselected.text_fill_position("original"), None);
+
+    let final_fill = NumberFormat::parse("*a@*b").unwrap();
+    assert_eq!(final_fill.text_fill_position("text"), Some((4, 'b')));
+}
+
+#[test]
 fn test_fill_text_and_fourth_section() {
     let options = FormatOptions {
         fill_count: 3,
