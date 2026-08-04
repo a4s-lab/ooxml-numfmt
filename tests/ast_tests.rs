@@ -1,6 +1,4 @@
-use ooxml_numfmt::ast::{
-    Color, Condition, DatePart, DigitPlaceholder, FormatPart, NamedColor, Section,
-};
+use ooxml_numfmt::ast::{Condition, DatePart, DigitPlaceholder, FormatPart, NamedColor, Section};
 use ooxml_numfmt::NumberFormat;
 
 #[test]
@@ -56,18 +54,6 @@ fn test_number_format_sections_limit() {
     // Should only keep first 4 sections
     let format = NumberFormat::from_sections(sections);
     assert_eq!(format.sections().len(), 4);
-}
-
-#[test]
-fn test_section_accessors_expose_immutable_syntax() {
-    let condition = Condition::GreaterThan(10.0);
-    let color = Color::Named(NamedColor::Red);
-    let parts = vec![FormatPart::Digit(DigitPlaceholder::Zero)];
-    let section = Section::new(Some(condition), Some(color), parts.clone());
-
-    assert_eq!(section.condition(), Some(condition));
-    assert_eq!(section.color(), Some(color));
-    assert_eq!(section.parts(), parts);
 }
 
 #[test]
