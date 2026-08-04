@@ -71,6 +71,12 @@ fn test_minute_vs_month_disambiguation() {
 }
 
 #[test]
+fn test_number_format_has_fill() {
+    assert!(NumberFormat::parse("0;*x0").unwrap().has_fill());
+    assert!(!NumberFormat::parse("0;0").unwrap().has_fill());
+}
+
+#[test]
 fn test_fill_treats_date_tokens_as_literal_characters() {
     for fill in [
         'B', 'b', 'y', 'Y', 'm', 'M', 'd', 'D', 'h', 'H', 's', 'S', 'E', 'e',
