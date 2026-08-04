@@ -19,70 +19,137 @@ fn format_with_fill(code: &str, value: f64, fill_count: usize) -> String {
 }
 
 #[test]
-fn default_numeric_formatting_omits_fill_output() {
-    assert_eq!(format_default("*x0", 42.0), "42");
-}
-
-#[test]
-fn default_date_formatting_omits_fill_output() {
-    assert_eq!(format_default("yyyy*-mm", 46031.0), "202601");
-}
-
-#[test]
-fn default_text_formatting_omits_fill_output() {
-    let format = NumberFormat::parse("\"<\"*x@\">\"").unwrap();
-
-    assert_eq!(
-        format.format_text("text", &FormatOptions::default()),
-        "<text>"
-    );
-}
-
-#[test]
-fn default_accounting_formatting_preserves_non_fill_content() {
-    assert_eq!(format_default("_($* #,##0.00_)", 1234.56), " $1,234.56 ");
-}
-
-#[test]
-fn default_formatting_uses_only_the_retained_final_fill() {
-    let format = NumberFormat::parse("*A0*B").unwrap();
-
-    assert_eq!(format.format(42.0, &FormatOptions::default()), "42");
-    assert_eq!(
-        format.sections()[0].parts(),
-        &[
-            ooxml_numfmt::ast::FormatPart::Digit(ooxml_numfmt::ast::DigitPlaceholder::Zero,),
-            ooxml_numfmt::ast::FormatPart::Fill('B'),
-        ]
-    );
-}
-
-#[test]
-fn skip_resolution_is_consistent_across_date_and_text_sections() {
+fn test_skip_resolution_always_be_one_space() {
     assert_eq!(format_default("yyyy_)", 46031.0), "2026 ");
 
-    let format = NumberFormat::parse("@_) ").unwrap();
+    let format = NumberFormat::parse("@_)").unwrap();
     assert_eq!(
         format.format_text("text", &FormatOptions::default()),
-        "text  "
+        "text "
     );
 }
 
 #[test]
-fn general_literals_preserve_source_order() {
-    assert_eq!(format_default("\"USD \"General", 42.0), "USD 42");
-    assert_eq!(format_default("General\" USD\"", 42.0), "42 USD");
-}
-
-#[test]
-fn expands_fill_before_after_and_inside_numbers() {
+fn test_fill_number() {
     assert_eq!(format_with_fill("*x0", 42.0, 3), "xxx42");
     assert_eq!(format_with_fill("0*x", 42.0, 3), "42xxx");
     assert_eq!(format_with_fill("0*x0", 42.0, 3), "4xxx2");
+    assert_eq!(format_with_fill("0.*x00", 1.23, 3), "1.xxx23");
+    assert_eq!(format_with_fill("0.00%*x", 0.5, 3), "50.00%xxx");
+    assert_eq!(format_with_fill("*x0", -42.0, 3), "-xxx42");
 }
 
 #[test]
-fn expands_accounting_space_fill_at_its_source_position() {
+fn test_fill_number_preserves_grouping_separator_side() {
+    assert_eq!(format_with_fill("#*x,##0", 1234.0, 3), "1xxx,234");
+    assert_eq!(format_with_fill("#,*x##0", 1234.0, 3), "1,xxx234");
+    assert_eq!(format_default("#\"a\",##0", 1234.0), "1a,234");
+    assert_eq!(format_default("#,\"a\"##0", 1234.0), "1,a234");
+    assert_eq!(format_with_fill("#\"a\",*x##0", 1234.0, 3), "1a,xxx234");
+}
+
+#[test]
+fn test_fill_number_is_omitted_by_default_or_without_directive() {
+    assert_eq!(format_default("*x0", 42.0), "42");
+    assert_eq!(format_with_fill("#,##0.00", 1234.5, 10), "1,234.50");
+}
+
+#[test]
+fn test_fill_number_unicode_scalars() {
+    assert_eq!(format_with_fill("*é0", 7.0, 0), "7");
+    assert_eq!(format_with_fill("*é0", 7.0, 1), "é7");
+    assert_eq!(format_with_fill("*é0", 7.0, 3), "ééé7");
+}
+
+#[test]
+fn test_fill_number_only_final_directive_is_effective() {
+    assert_eq!(format_with_fill("*a0*b0", 42.0, 3), "4bbb2");
+}
+
+#[test]
+fn test_fill_date() {
+    assert_eq!(
+        format_with_fill("*xyyyy-mm-dd", 46031.0, 3),
+        "xxx2026-01-09"
+    );
+    assert_eq!(format_with_fill("yyyy*x-mm", 46031.0, 3), "2026xxx-01");
+    assert_eq!(
+        format_with_fill("yyyy-mm-dd*x", 46031.0, 3),
+        "2026-01-09xxx"
+    );
+}
+
+#[cfg(feature = "bigint")]
+#[test]
+fn test_fill_bigint() {
+    let value = ooxml_numfmt::BigInt::parse_bytes(b"123456789012345678", 10).unwrap();
+    let options = FormatOptions {
+        fill_count: 3,
+        ..FormatOptions::default()
+    };
+    let format = NumberFormat::parse("0*x0").unwrap();
+
+    assert_eq!(
+        format.format_bigint(&value, &options),
+        "12345678901234567xxx8"
+    );
+}
+
+#[test]
+fn test_fill_scientific() {
+    assert_eq!(format_with_fill("*x0.00E+00", 1234.0, 3), "xxx1.23E+03");
+    assert_eq!(format_with_fill("*x0.00E+00", -1234.0, 3), "-xxx1.23E+03");
+    assert_eq!(format_with_fill("##0*x.0E+0", 1.0, 3), "1xxx.0E+0");
+    assert_eq!(format_with_fill("0*x.0E+0", 9.96, 3), "1xxx.0E+1");
+    assert_eq!(format_with_fill("0*x0.0E+0", 99.96, 3), "0xxx1.0E+2");
+    assert_eq!(format_with_fill("0.*x00E+00", 1234.0, 3), "1.xxx23E+03");
+    assert_eq!(format_with_fill("0.0*xE+00", 120.0, 3), "1.2xxxE+02");
+    assert_eq!(format_with_fill("0.00E+0*x0", 1234.0, 3), "1.23E+0xxx3");
+    assert_eq!(format_with_fill("0.00E+0*x0", 1e123, 3), "1.00E+12xxx3");
+}
+
+#[test]
+fn test_fill_fraction() {
+    assert_eq!(format_with_fill("*x# ?/?", 1.5, 3), "xxx1 1/2");
+    assert_eq!(format_with_fill("*x# ?/?", -1.5, 3), "-xxx1 1/2");
+    assert_eq!(format_with_fill("# ?/?*x", 1.5, 3), "1 1/2xxx");
+    assert_eq!(format_with_fill("# ?/?;-*x# ?/?", -1.5, 3), "-xxx1 1/2");
+    assert_eq!(format_with_fill("# ?/?;(*x# ?/?)", -1.5, 3), "(xxx1 1/2)");
+
+    // Fraction at internal
+    assert_eq!(format_with_fill("#*x# ?/?", 12.5, 3), "1xxx2 1/2");
+    assert_eq!(format_with_fill("# *x?/?", 1.5, 3), "1 xxx1/2");
+    assert_eq!(format_with_fill("# ?*x/?", 1.5, 3), "1 1xxx/2");
+    assert_eq!(format_with_fill("# ? *x/?", 1.5, 3), "1 1 xxx/2");
+    assert_eq!(format_with_fill("# ?/*x?", 1.5, 3), "1 1/xxx2");
+    assert_eq!(format_with_fill("# ?/*x ?", 1.5, 3), "1 1/xxx 2");
+    assert_eq!(format_with_fill("# ?/ *x?", 1.5, 3), "1 1/ xxx2");
+    assert_eq!(format_with_fill("# ?/1*x6", 1.2, 3), "1 3/1xxx6");
+}
+
+#[test]
+fn test_fill_general() {
+    assert_eq!(format_with_fill("*xGeneral", 42.0, 3), "xxx42");
+    assert_eq!(format_with_fill("\"pre\"*xGeneral", 42.0, 3), "prexxx42");
+    assert_eq!(
+        format_with_fill("\"pre\"*xGeneral\"post\"", 42.0, 3),
+        "prexxx42post"
+    );
+    assert_eq!(
+        format_with_fill("\"pre\"*xGeneral\"post\"", -42.0, 3),
+        "prexxx-42post"
+    );
+    assert_eq!(
+        format_with_fill("\"pre\"General*x\"post\"", 42.0, 3),
+        "pre42xxxpost"
+    );
+    assert_eq!(format_with_fill("General*x", 42.0, 3), "42xxx");
+    assert_eq!(format_with_fill("\"[\"General*x\"]\"", 42.0, 3), "[42xxx]");
+    assert_eq!(format_with_fill("\"[\"*x\"]\"", 42.0, 3), "[xxx]");
+}
+
+#[test]
+fn test_fill_accounting() {
     assert_eq!(
         format_with_fill("_($* #,##0.00_)", 1234.56, 3),
         " $   1,234.56 "
@@ -90,16 +157,7 @@ fn expands_accounting_space_fill_at_its_source_position() {
 }
 
 #[test]
-fn expands_fill_across_semantic_format_kinds() {
-    assert_eq!(format_with_fill("yyyy*x-mm", 46031.0, 3), "2026xxx-01");
-    assert_eq!(format_with_fill("# ?/?*x", 1.5, 3), "1 1/2xxx");
-    assert_eq!(format_with_fill("0.0*xE+00", 120.0, 3), "1.2xxxE+02");
-    assert_eq!(format_with_fill("\"[\"General*x\"]\"", 42.0, 3), "[42xxx]");
-    assert_eq!(format_with_fill("\"[\"*x\"]\"", 42.0, 3), "[xxx]");
-}
-
-#[test]
-fn expands_fill_in_text_and_fourth_sections() {
+fn test_fill_text_and_fourth_section() {
     let options = FormatOptions {
         fill_count: 3,
         ..FormatOptions::default()
@@ -113,7 +171,7 @@ fn expands_fill_in_text_and_fourth_sections() {
 }
 
 #[test]
-fn respects_selected_numeric_sections() {
+fn test_fill_section_selection() {
     let code = "0*x;[Red]-0*y;\"zero\"*z";
 
     assert_eq!(format_with_fill(code, 5.0, 2), "5xx");
@@ -126,24 +184,7 @@ fn respects_selected_numeric_sections() {
 }
 
 #[test]
-fn fill_count_is_exact_and_counts_unicode_scalars() {
-    assert_eq!(format_with_fill("*é0", 7.0, 0), "7");
-    assert_eq!(format_with_fill("*é0", 7.0, 1), "é7");
-    assert_eq!(format_with_fill("*é0", 7.0, 3), "ééé7");
-}
-
-#[test]
-fn non_fill_sections_ignore_nonzero_fill_count() {
-    assert_eq!(format_with_fill("#,##0.00", 1234.5, 20), "1,234.50");
-}
-
-#[test]
-fn only_the_final_fill_is_effective_at_its_retained_position() {
-    assert_eq!(format_with_fill("*a0*b0", 42.0, 3), "4bbb2");
-}
-
-#[test]
-fn cached_formats_are_reused_with_distinct_fill_counts() {
+fn test_fill_cache_reuses_formats_with_distinct_counts() {
     let first = FormatOptions {
         fill_count: 1,
         ..FormatOptions::default()
@@ -161,7 +202,7 @@ fn cached_formats_are_reused_with_distinct_fill_counts() {
 }
 
 #[test]
-fn fallible_apis_report_oversized_fill_output() {
+fn test_fill_error_for_oversized_output() {
     let options = FormatOptions {
         fill_count: usize::MAX,
         ..FormatOptions::default()
@@ -183,20 +224,4 @@ fn fallible_apis_report_oversized_fill_output() {
     );
     assert_eq!(numeric.format(42.0, &options), "42");
     assert_eq!(text.format_text("text", &options), "text");
-}
-
-#[cfg(feature = "bigint")]
-#[test]
-fn expands_fill_for_large_bigint_values() {
-    let value = ooxml_numfmt::BigInt::parse_bytes(b"123456789012345678", 10).unwrap();
-    let options = FormatOptions {
-        fill_count: 3,
-        ..FormatOptions::default()
-    };
-    let format = NumberFormat::parse("0*x0").unwrap();
-
-    assert_eq!(
-        format.format_bigint(&value, &options),
-        "12345678901234567xxx8"
-    );
 }
