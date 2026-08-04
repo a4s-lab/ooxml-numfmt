@@ -1,6 +1,6 @@
 [package]
 name = "ooxml-numfmt"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 description = "Excel-compatible ECMA-376 number format codes"
 license = "MIT OR Apache-2.0"
