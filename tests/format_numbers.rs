@@ -19,6 +19,20 @@ fn test_format_decimal() {
 }
 
 #[test]
+fn test_format_decimal_without_integer_placeholder() {
+    let opts = FormatOptions::default();
+
+    let decimal = NumberFormat::parse(".00").unwrap();
+    assert_eq!(decimal.format(3.14159, &opts), "3.14");
+    assert_eq!(decimal.format(0.14159, &opts), ".14");
+    assert_eq!(decimal.format(0.0, &opts), ".00");
+
+    let embedded = NumberFormat::parse("\"This is a \".00\"test\"000").unwrap();
+    assert_eq!(embedded.format(3.14159, &opts), "This is a 3.14test159");
+    assert_eq!(embedded.format(-3.14159, &opts), "-This is a 3.14test159");
+}
+
+#[test]
 fn test_format_thousands() {
     let fmt = NumberFormat::parse("#,##0").unwrap();
     let opts = FormatOptions::default();

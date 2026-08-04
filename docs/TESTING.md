@@ -37,7 +37,7 @@ cargo test --release --test ssf_oddities_tests -- --nocapture
 
 4. **ssf_oddities_tests.rs** - `oddities.json`
    - Tests edge cases and unusual format combinations
-   - **Status**: 248/275 (90.2%) - 21 skipped, 6 failing
+   - **Status**: 250/275 (90.9%) - 21 skipped, 4 failing
 
 5. **ssf_date_tests.rs** - `date.json`
    - Tests date value roundtripping
@@ -78,11 +78,11 @@ TSV fixtures are stored as `.tsv.gz` files and decompressed during tests with `f
 ## Summary
 
 - **Total test cases**: 19,576,922
-- **Total passing**: 19,576,808
-- **Total failing**: 6
+- **Total passing**: 19,576,810
+- **Total failing**: 4
 - **Total skipped**: 108
-- **Overall pass rate**: 99.99997% of evaluated cases
+- **Overall pass rate**: 99.99998% of evaluated cases
 
 ## Failed Cases
 
-- **Oddities**: 6
+- **Oddities**: 4

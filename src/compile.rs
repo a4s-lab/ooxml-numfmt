@@ -385,9 +385,9 @@ fn compile_number_spec(parts: &[FormatPart]) -> NumberSpec {
             .saturating_sub(trailing_comma_count),
     );
 
-    if integer_placeholders.is_empty() && decimal_point_index.is_none() {
+    if integer_placeholders.is_empty() {
         integer_placeholders.push(NumberPlaceholder {
-            operation_index: 0,
+            operation_index: decimal_point_index.unwrap_or(0),
             placeholder: DigitPlaceholder::Hash,
         });
     }

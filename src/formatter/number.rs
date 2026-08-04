@@ -227,7 +227,9 @@ fn prepare_number_fields(
     prepare_decimal_fields(rounded.fract(), spec, &mut fields);
 
     if let Some(operation_index) = spec.decimal_point_index {
-        fields[operation_index] = Some(opts.locale.decimal_separator.to_string());
+        fields[operation_index]
+            .get_or_insert_with(String::new)
+            .push(opts.locale.decimal_separator);
     }
 
     fields
@@ -341,7 +343,9 @@ pub(super) fn evaluate_integer_digits(
     prepare_integer_digit_fields(&value_digits, spec, opts, &mut fields);
     prepare_decimal_fields(0.0, spec, &mut fields);
     if let Some(operation_index) = spec.decimal_point_index {
-        fields[operation_index] = Some(opts.locale.decimal_separator.to_string());
+        fields[operation_index]
+            .get_or_insert_with(String::new)
+            .push(opts.locale.decimal_separator);
     }
 
     Ok(super::evaluate_operations(

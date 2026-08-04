@@ -145,6 +145,17 @@ mod tests {
     }
 
     #[test]
+    fn renders_bigint_before_decimal_without_integer_placeholder() {
+        let value = BigInt::from(42);
+        let format = crate::NumberFormat::parse(".00").unwrap();
+
+        assert_eq!(
+            format.format_bigint(&value, &FormatOptions::default()),
+            "42.00"
+        );
+    }
+
+    #[test]
     fn preserves_fill_inside_large_integer_placeholders() {
         let value = BigInt::parse_bytes(b"123456789012345678", 10).unwrap();
         let format = crate::NumberFormat::parse("0*x0").unwrap();
