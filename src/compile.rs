@@ -36,6 +36,8 @@ pub(crate) struct SectionPlan {
     pub(crate) operations: Box<[Operation]>,
     /// Date and time properties derived during compilation.
     pub(crate) date: DateSpec,
+    /// Text-placeholder layout properties derived during compilation.
+    pub(crate) text: Option<TextSpec>,
     /// Standard-number properties derived during compilation.
     pub(crate) number: Option<NumberSpec>,
     /// Scientific-notation properties derived during compilation.
@@ -74,6 +76,22 @@ pub(crate) enum Operation {
     Skip(char),
     /// A semantic syntax part evaluated by a specialized formatter.
     Semantic(FormatPart),
+}
+
+/// Reusable text-placeholder layout properties.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TextSpec {
+    /// A trailing fill anchored to the first line of one text placeholder.
+    pub(crate) first_line_fill: Option<TextFillAnchor>,
+}
+
+/// Source operation relationship for a multiline text fill anchor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TextFillAnchor {
+    /// Operation index of the sole text placeholder.
+    pub(crate) placeholder_index: usize,
+    /// Original operation index of the retained fill.
+    pub(crate) fill_index: usize,
 }
 
 /// Reusable numeric placeholder analysis for standard numbers and BigInt values.
@@ -224,11 +242,37 @@ fn compile_section(section: &Section, section_index: usize) -> Result<SectionPla
         kind,
         operations: section.parts().iter().map(compile_operation).collect(),
         date: compile_date_spec(section.parts()),
+        text: compile_text_spec(section.parts()),
         number: (kind == SectionKind::Number).then(|| compile_number_spec(section.parts())),
         scientific: (kind == SectionKind::Scientific)
             .then(|| compile_scientific_spec(section.parts())),
         fraction,
     })
+}
+
+/// Compile text-placeholder properties for any section that can format text.
+fn compile_text_spec(parts: &[FormatPart]) -> Option<TextSpec> {
+    let mut placeholders = parts
+        .iter()
+        .enumerate()
+        .filter_map(|(index, part)| matches!(part, FormatPart::TextPlaceholder).then_some(index));
+    let placeholder_index = placeholders.next()?;
+    if placeholders.next().is_some() {
+        return Some(TextSpec {
+            first_line_fill: None,
+        });
+    }
+
+    let first_line_fill = parts
+        .iter()
+        .position(|part| matches!(part, FormatPart::Fill(_)))
+        .filter(|fill_index| *fill_index > placeholder_index)
+        .map(|fill_index| TextFillAnchor {
+            placeholder_index,
+            fill_index,
+        });
+
+    Some(TextSpec { first_line_fill })
 }
 
 /// Compile scientific mantissa and exponent fields from normalized syntax.
@@ -558,6 +602,27 @@ mod tests {
                 Operation::Semantic(FormatPart::Digit(DigitPlaceholder::Zero)),
                 Operation::Fill('B'),
             ]
+        );
+    }
+
+    #[test]
+    fn compiles_text_first_line_fill_anchor_once() {
+        let trailing = plan("@\"!\"*-");
+        assert_eq!(
+            trailing.text.unwrap().first_line_fill,
+            Some(TextFillAnchor {
+                placeholder_index: 0,
+                fill_index: 2,
+            })
+        );
+        assert_eq!(plan("*-@").text.unwrap().first_line_fill, None);
+        assert_eq!(plan("@@*-").text.unwrap().first_line_fill, None);
+        assert_eq!(
+            plan("0@*-").text.unwrap().first_line_fill,
+            Some(TextFillAnchor {
+                placeholder_index: 1,
+                fill_index: 2,
+            })
         );
     }
 
