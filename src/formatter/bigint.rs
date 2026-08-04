@@ -39,10 +39,9 @@ pub(super) fn evaluate_bigint(
             _ => None,
         })),
         SectionKind::Literal | SectionKind::Text => {
+            let mut numeric_text = (plan.kind == SectionKind::Text).then(|| value.to_string());
             Ok(super::evaluate_operations(plan, |_, part| match part {
-                FormatPart::TextPlaceholder if plan.kind == SectionKind::Text => {
-                    Some(value.to_string())
-                }
+                FormatPart::TextPlaceholder => numeric_text.take(),
                 FormatPart::Locale(locale) => locale.currency.clone(),
                 FormatPart::Percent => Some("%".to_string()),
                 _ => None,
@@ -131,6 +130,17 @@ mod tests {
                 .try_format_bigint(&value, &FormatOptions::default())
                 .unwrap(),
             "$123,456,789,012,345,678.00"
+        );
+    }
+
+    #[test]
+    fn repeated_text_placeholders_render_bigint_once() {
+        let value = BigInt::parse_bytes(b"123456789012345678", 10).unwrap();
+        let format = crate::NumberFormat::parse("@@").unwrap();
+
+        assert_eq!(
+            format.format_bigint(&value, &FormatOptions::default()),
+            "123456789012345678"
         );
     }
 

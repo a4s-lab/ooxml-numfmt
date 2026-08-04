@@ -135,8 +135,9 @@ impl NumberFormat {
         }
 
         if plan.kind == SectionKind::Text {
+            let mut numeric_text = Some(fallback_format(format_value));
             let parts = evaluate_operations(plan, |_, part| match part {
-                FormatPart::TextPlaceholder => Some(fallback_format(format_value)),
+                FormatPart::TextPlaceholder => numeric_text.take(),
                 FormatPart::Locale(locale) => locale.currency.clone(),
                 _ => None,
             });
@@ -568,6 +569,17 @@ mod tests {
         let opts = FormatOptions::default();
 
         assert_eq!(fmt.format_text("hello", &opts), "prehellopost");
+    }
+
+    #[test]
+    fn repeated_text_placeholders_render_numeric_values_once() {
+        let format = NumberFormat::parse("@@").unwrap();
+        let options = FormatOptions::default();
+
+        assert_eq!(format.format(1.0, &options), "1");
+        assert_eq!(format.format(-1.0, &options), "-1");
+        assert_eq!(format.format(0.0, &options), "0");
+        assert_eq!(format.format_text("sheetjs", &options), "sheetjssheetjs");
     }
 
     #[test]
