@@ -488,6 +488,16 @@ impl NumberFormat {
             .any(|plan| plan.condition.is_some())
     }
 
+    /// Returns true if any section contains a fill directive.
+    pub fn has_fill(&self) -> bool {
+        self.sections.iter().any(|section| {
+            section
+                .parts()
+                .iter()
+                .any(|part| matches!(part, FormatPart::Fill(_)))
+        })
+    }
+
     /// Parse a format code string into a NumberFormat.
     pub fn parse(format_code: &str) -> Result<NumberFormat, ParseError> {
         crate::parser::parse(format_code)
