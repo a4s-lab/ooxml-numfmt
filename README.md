@@ -49,14 +49,6 @@ assert_eq!(fmt.format(1234.56, &opts), " $   1,234.56 ");
 `fill_count` counts Unicode scalar values and defaults to zero. `_x` remains a
 plain-text width approximation and emits one ASCII space.
 
-## Migration notes
-
-`Section` syntax is now immutable after construction so its compiled execution
-plan cannot become stale. Code that previously used or mutated public fields
-should use `Section::new(condition, color, parts)` and the `condition()`,
-`color()`, and `parts()` accessors. The derived `SectionMetadata` type has been
-removed; dispatch metadata is private compiled state.
-
 ## Testing
 
 ssfmt was inspired by SheetJS SSF, so this fork keeps its SSF-based compatibility tests. The suite covers 19.5+ million cases, with 99.99% of evaluated cases passing.
