@@ -214,6 +214,22 @@ impl NumberFormat {
         }
     }
 
+    /// Return the insertion position and character of the effective text fill.
+    ///
+    /// The position is a UTF-8 byte offset and character boundary in the
+    /// selected text section's fill-free output. This is the output produced by
+    /// [`Self::try_format_text`] when [`FormatOptions::fill_count`] is zero.
+    /// Literal text and the ASCII space emitted by each skip directive are
+    /// included in the offset.
+    ///
+    /// Returns `None` when no text section is selected or the selected section
+    /// has no effective fill directive.
+    pub fn text_fill_position(&self, text: &str) -> Option<(usize, char)> {
+        let section_index = self.select_text_section_index()?;
+        let parts = text::evaluate_text(&self.compiled.sections[section_index], text);
+        render::fill_position(&parts)
+    }
+
     /// Format a text value using this format code.
     pub fn format_text(&self, text: &str, opts: &FormatOptions) -> String {
         self.try_format_text(text, opts)
