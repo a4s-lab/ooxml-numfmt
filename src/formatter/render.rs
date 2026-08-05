@@ -27,21 +27,6 @@ pub(crate) fn push_text(parts: &mut Vec<RenderPart>, text: impl Into<String>) {
     }
 }
 
-/// Return the first fill directive's position in fill-free output.
-pub(crate) fn fill_position(parts: &[RenderPart]) -> Option<(usize, char)> {
-    let mut offset = 0_usize;
-
-    for part in parts {
-        match part {
-            RenderPart::Text(text) => offset = offset.checked_add(text.len())?,
-            RenderPart::Fill(character) => return Some((offset, *character)),
-            RenderPart::Skip(_) => offset = offset.checked_add(1)?,
-        }
-    }
-
-    None
-}
-
 /// Resolve every layout directive into one plain-text string.
 pub(crate) fn resolve_layout(
     parts: &[RenderPart],
@@ -108,18 +93,6 @@ mod tests {
     #[test]
     fn resolves_skip_as_one_ascii_space() {
         assert_eq!(resolve_layout(&[RenderPart::Skip(')')], 0).unwrap(), " ");
-    }
-
-    #[test]
-    fn locates_fill_in_fill_free_utf8_output() {
-        let parts = [
-            RenderPart::Text("é".to_string()),
-            RenderPart::Skip('界'),
-            RenderPart::Text("값".to_string()),
-            RenderPart::Fill('界'),
-        ];
-
-        assert_eq!(fill_position(&parts), Some((6, '界')));
     }
 
     #[test]
